@@ -1,0 +1,7 @@
+# ASR worker：Qwen3-ASR（PyTorch / MPS）
+qwen-asr>=0.0.6
+torch>=2.4
+transformers>=4.57
+fastapi>=0.110
+uvicorn>=0.29
+numpy>=1.26
