@@ -1,0 +1,18 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  xctest:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests
+        run: |
+          xcodebuild -project Minutes.xcodeproj -scheme Minutes \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath DerivedData test
