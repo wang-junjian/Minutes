@@ -1,97 +1,134 @@
 #!/usr/bin/env bash
-# 初始化 Minutes 推理引擎：两个独立 venv（分进程分环境，torch 与 mlx 不混装）。
-#
-# 加速策略（相比初版 pip 串行安装，通常从 30 分钟降到 3 分钟以内）：
-#   1. 用 uv 并发下载；默认走清华镜像，可用 PIP_INDEX_URL 覆盖；
-#   2. ASR 的 torch/transformers 直接复用 voxcpm-studio 的现成 venv（.pth 链接，
-#      约 800 MB 免下载）。仍是独立进程，隔离原则不破；
-#      用 MINUTES_ASR_REUSE="" 可强制全新安装。
-#
-# 用法：
-#   scripts/bootstrap.sh
+# 构建并安装固定版本的 audio.cpp / llama.cpp（Apple Silicon + Metal）。
 set -euo pipefail
 
-INDEX="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
-ENGINE_ROOT="${MINUTES_ENGINE_ROOT:-$HOME/Library/Application Support/Minutes/engine}"
+if [ "$(id -u)" -eq 0 ]; then
+  echo "✗ 请不要使用 sudo；原生引擎会安装到当前用户的 ~/Library/Application Support/Minutes。" >&2
+  echo "  请运行：sh scripts/bootstrap.sh" >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PY="python3.12"
-UV="$(command -v uv || true)"
+# shellcheck source=../Engine/dependencies.lock
+source "$PROJECT_ROOT/Engine/dependencies.lock"
 
-echo "→ 引擎目录：$ENGINE_ROOT"
-echo "→ 包索引：$INDEX"
-[ -n "$UV" ] && echo "→ 安装器：uv $("$UV" --version | awk '{print $2}')" || echo "→ 安装器：pip（建议 brew install uv）"
-mkdir -p "$ENGINE_ROOT"
+ENGINE_ROOT="${MINUTES_ENGINE_ROOT:-$HOME/Library/Application Support/Minutes/engine}"
+NATIVE_ROOT="$PROJECT_ROOT/Engine/.native"
+JOBS="${MINUTES_BUILD_JOBS:-$(/usr/sbin/sysctl -n hw.ncpu)}"
+MACOS_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
-# 1. 拷贝引擎代码（幂等）
-if [ "$PROJECT_ROOT/Engine" -ef "$ENGINE_ROOT" ]; then
-  echo "→ 引擎目录即工程目录，跳过拷贝"
-else
-  rsync -a --delete "$PROJECT_ROOT/Engine/minutes_engine" "$ENGINE_ROOT/"
-  rsync -a "$PROJECT_ROOT/Engine/requirements/" "$ENGINE_ROOT/requirements/"
-fi
+for tool in git cmake clang++ xcrun curl install otool codesign tar; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "✗ 缺少构建工具：$tool" >&2; exit 1; }
+done
+xcrun --find metal >/dev/null 2>&1 || { echo "✗ 未找到 Metal 编译器，请安装 Xcode" >&2; exit 1; }
 
-create_venv() {
-  local venv="$1"
-  if [ ! -x "$venv/bin/python" ]; then
-    echo "→ 创建 venv: $venv"
-    if [ -n "$UV" ]; then
-      "$UV" venv --python "$PY" "$venv"
+mkdir -p "$NATIVE_ROOT/src" "$NATIVE_ROOT/build" "$ENGINE_ROOT/bin" "$ENGINE_ROOT/lib"
+
+fetch_repo() {
+  local name="$1" repository="$2" commit="$3"
+  local directory="$NATIVE_ROOT/src/$name"
+  if [ -d "$directory" ] && [ ! -d "$directory/.git" ] && [ -n "$(/bin/ls -A "$directory")" ]; then
+    echo "✗ $directory 非空但不是 Git 源码目录" >&2
+    exit 1
+  fi
+  mkdir -p "$directory"
+  if [ ! -d "$directory/.git" ]; then
+    git -C "$directory" init
+    git -C "$directory" remote add origin "$repository"
+  fi
+  if [ -f "$directory/.minutes-source-commit" ] && [ "$(<"$directory/.minutes-source-commit")" = "$commit" ]; then
+    echo "✓ $name 源码归档版本已固定"
+    return 0
+  fi
+  local archive="$NATIVE_ROOT/archives/$name-$commit.tar.gz"
+  if [ -s "$archive" ] && tar -tzf "$archive" >/dev/null 2>&1; then
+    echo "✓ 使用已验证的 $name 源码归档"
+    tar -xzf "$archive" -C "$directory" --strip-components 1
+    printf '%s\n' "$commit" > "$directory/.minutes-source-commit"
+    return 0
+  fi
+  if [ "$(git -C "$directory" rev-parse HEAD 2>/dev/null || true)" != "$commit" ]; then
+    echo "→ 获取 $name@$commit"
+    if git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 \
+      -C "$directory" fetch --depth 1 origin "$commit"; then
+      git -C "$directory" checkout --detach "$commit"
     else
-      "$PY" -m venv "$venv"
+      echo "→ Git 传输失败，改用同一提交的源码归档"
+      archive="$NATIVE_ROOT/archives/$name-$commit.tar.gz"
+      mkdir -p "$NATIVE_ROOT/archives"
+      rm -f "$archive.download"
+      # codeload 不支持 Range；完整下载并验证归档后才替换，避免误用半截文件。
+      curl --http1.1 --fail --location --output "$archive.download" \
+        "${repository%.git}/archive/$commit.tar.gz"
+      [ -s "$archive.download" ] && tar -tzf "$archive.download" >/dev/null
+      mv "$archive.download" "$archive"
+      tar -xzf "$archive" -C "$directory" --strip-components 1
+      printf '%s\n' "$commit" > "$directory/.minutes-source-commit"
     fi
-  fi
-}
-
-install() { # install <venv> <packages...>
-  local venv="$1"; shift
-  if [ -n "$UV" ]; then
-    UV_HTTP_TIMEOUT=60 "$UV" pip install --python "$venv/bin/python" --index-url "$INDEX" "$@"
   else
-    "$venv/bin/pip" install -i "$INDEX" "$@"
+    echo "✓ $name 源码版本已固定"
   fi
 }
 
-# ---------------------------------------------------------------- ASR ----
-ASR_VENV="$ENGINE_ROOT/.venvs/asr"
-create_venv "$ASR_VENV"
-ASR_SITE="$("$ASR_VENV/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+fetch_repo audio.cpp "$AUDIOCPP_REPOSITORY" "$AUDIOCPP_COMMIT"
+fetch_repo llama.cpp "$LLAMACPP_REPOSITORY" "$LLAMACPP_COMMIT"
 
-REUSE="${MINUTES_ASR_REUSE-$HOME/GitHub/wang-junjian/voxcpm-studio/.venv}"
-REUSE_SP="$(ls -d "$REUSE"/lib/python3.12/site-packages 2>/dev/null || true)"
+# llama.cpp：只构建本机服务，模型由独立 Shell 脚本下载。
+LLAMA_SOURCE="$NATIVE_ROOT/src/llama.cpp"
+LLAMA_BUILD="$NATIVE_ROOT/build/llama.cpp"
+echo "→ 配置 llama.cpp（Release / arm64 / Metal）"
+cmake -S "$LLAMA_SOURCE" -B "$LLAMA_BUILD" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_TARGET" \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_NATIVE=ON \
+  -DGGML_METAL=ON \
+  -DGGML_METAL_EMBED_LIBRARY=ON \
+  -DGGML_CCACHE=OFF \
+  -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DLLAMA_BUILD_TOOLS=ON \
+  -DLLAMA_BUILD_SERVER=ON \
+  -DLLAMA_BUILD_UI=OFF \
+  -DLLAMA_USE_PREBUILT_UI=OFF \
+  -DLLAMA_BUILD_COMMIT="${LLAMACPP_COMMIT:0:7}" \
+  -DLLAMA_CURL=OFF \
+  -DLLAMA_OPENSSL=OFF
+cmake --build "$LLAMA_BUILD" --config Release --target llama-server -j "$JOBS"
 
-if [ -n "$REUSE_SP" ] && [ -d "$REUSE_SP/torch" ]; then
-  echo "→ ASR 复用 torch: $REUSE_SP（.pth 链接，免下载约 800 MB）"
-  echo "$REUSE_SP" > "$ASR_SITE/reuse-voxcpm.pth"
-  install "$ASR_VENV" qwen-asr --no-deps fastapi uvicorn soundfile python-multipart
-  # --no-deps 后按 ImportError 逐个补齐缺失依赖（最多 8 轮）
-  for i in $(seq 1 8); do
-    if "$ASR_VENV/bin/python" -c 'import qwen_asr' 2>/tmp/minutes_importerr; then
-      echo "→ ASR 依赖就绪"
-      break
-    fi
-    mod="$(sed -n "s/No module named '\([^.']*\).*/\1/p" /tmp/minutes_importerr | head -1)"
-    if [ -z "$mod" ]; then cat /tmp/minutes_importerr; echo "✗ ASR 依赖解析失败"; exit 1; fi
-    echo "→ 补齐缺失依赖: $mod"
-    install "$ASR_VENV" "$mod"
-  done
-else
-  echo "→ 未找到可复用的 torch，全新安装（较慢）"
-  install "$ASR_VENV" -r "$ENGINE_ROOT/requirements/asr.txt"
-fi
+# audio.cpp：使用上游 Metal 部署脚本，确保 metallib 与后端资源正确处理。
+AUDIO_SOURCE="$NATIVE_ROOT/src/audio.cpp"
+echo "→ 构建 audio.cpp（Release / arm64 / Metal）"
+"$AUDIO_SOURCE/scripts/build_metal.sh" --deployment-build --target audiocpp_server
+AUDIO_BINARY="$AUDIO_SOURCE/build/macos-metal-release/bin/audiocpp_server"
+LLAMA_BINARY="$LLAMA_BUILD/bin/llama-server"
+[ -x "$AUDIO_BINARY" ] || { echo "✗ 未生成 $AUDIO_BINARY" >&2; exit 1; }
+[ -x "$LLAMA_BINARY" ] || { echo "✗ 未生成 $LLAMA_BINARY" >&2; exit 1; }
 
-# ---------------------------------------------------------------- LLM ----
-LLM_VENV="$ENGINE_ROOT/.venvs/llm"
-create_venv "$LLM_VENV"
-echo "→ 安装 llm 依赖（mlx-lm>=0.32，OptiQ 混合精度支持）"
-install "$LLM_VENV" "mlx-lm>=0.32" fastapi uvicorn
+install_binary() {
+  local source="$1" name="$2"
+  local temporary="$ENGINE_ROOT/bin/.$name.installing"
+  install -m 755 "$source" "$temporary"
+  mv "$temporary" "$ENGINE_ROOT/bin/$name"
+  codesign --force --sign - "$ENGINE_ROOT/bin/$name" >/dev/null
+}
 
-# ---------------------------------------------------------------- 验证 ----
+install_binary "$AUDIO_BINARY" audiocpp_server
+install_binary "$LLAMA_BINARY" llama-server
+
+for binary in "$ENGINE_ROOT/bin/audiocpp_server" "$ENGINE_ROOT/bin/llama-server"; do
+  echo "→ 检查动态依赖：$binary"
+  if otool -L "$binary" | /usr/bin/grep -Ei 'Python\.framework|Torch|MLX|ffmpeg|/opt/homebrew|'"$NATIVE_ROOT" ; then
+    echo "✗ 发现禁止的运行依赖：$binary" >&2
+    exit 1
+  fi
+done
+
+"$ENGINE_ROOT/bin/audiocpp_server" --version
+"$ENGINE_ROOT/bin/llama-server" --version
+
 echo ""
-echo "→ 验证两个 venv 的关键依赖"
-"$ASR_VENV/bin/python" -c 'import qwen_asr, torch, fastapi; print(f"asr   ok  torch={torch.__version__} mps={torch.backends.mps.is_available()}")'
-"$LLM_VENV/bin/python" -c 'import mlx_lm, mlx.core as mx; print(f"llm   ok  mlx={mx.__version__} mlx_lm={mlx_lm.__version__}")'
-
-echo ""
-echo "✅ 全部完成。应用「设置」中的引擎目录应为："
-echo "   $ENGINE_ROOT"
+echo "✅ 原生引擎安装完成：$ENGINE_ROOT/bin"
+echo "下一步：bash scripts/download_models.sh"

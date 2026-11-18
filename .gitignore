@@ -5,6 +5,9 @@ build/
 *.xcuserstate
 xcuserdata/
 
+# Native engine
+Engine/.native/
+
 # Python
 __pycache__/
 *.pyc

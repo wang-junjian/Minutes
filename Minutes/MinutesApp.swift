@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct MinutesApp: App {
@@ -16,6 +17,9 @@ struct MinutesApp: App {
                 .environment(store)
                 .environment(supervisor)
                 .frame(minWidth: 760, minHeight: 520)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    supervisor.stopAll()
+                }
         }
         .defaultSize(width: 980, height: 680)
         .windowToolbarStyle(.unified)

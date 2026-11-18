@@ -1,5 +1,0 @@
-# LLM worker：Qwen3.5-4B-OptiQ-4bit（MLX）
-# OptiQ 混合精度量化需要 mlx-lm >= 0.32。
-mlx-lm>=0.32
-fastapi>=0.110
-uvicorn>=0.29

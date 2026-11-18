@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// 设置：引擎路径、端口、worker 状态、诊断日志。
 struct SettingsView: View {
@@ -8,8 +9,10 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("模型") {
-                PathField(title: "语音识别模型", text: $configuration.asrModelPath)
-                PathField(title: "语言模型", text: $configuration.llmModelPath)
+                PathField(title: "语音识别模型（GGUF）", text: $configuration.asrModelPath)
+                ValidationText(configuration.modelPathError(for: .asr))
+                PathField(title: "语言模型（GGUF）", text: $configuration.llmModelPath)
+                ValidationText(configuration.modelPathError(for: .llm))
             }
 
             Section("引擎") {
@@ -60,8 +63,15 @@ struct SettingsView: View {
                     .frame(minHeight: 160)
                 HStack {
                     Button("清空") { supervisor.clearLogs() }
+                    Button {
+                        copyLogs()
+                    } label: {
+                        Label("复制日志", systemImage: "doc.on.doc")
+                    }
+                    .disabled(supervisor.logs.isEmpty)
+                    .help("复制全部诊断日志")
                     Spacer()
-                    Text("引擎目录需先运行 scripts/bootstrap.sh 初始化")
+                    Text("先运行 scripts/bootstrap.sh；首次使用再运行 scripts/download_models.sh")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -70,6 +80,15 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 620)
         .padding()
+    }
+
+    private func copyLogs() {
+        let formatter = ISO8601DateFormatter()
+        let text = supervisor.logs.map { line in
+            "[\(formatter.string(from: line.timestamp))] \(line.source) \(line.text)"
+        }.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func portBinding(for kind: EngineWorkerKind) -> Binding<Int> {
@@ -89,6 +108,22 @@ private struct PathField: View {
             TextField("", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
+        }
+    }
+}
+
+private struct ValidationText: View {
+    let message: String?
+
+    init(_ message: String?) {
+        self.message = message
+    }
+
+    var body: some View {
+        if let message {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
         }
     }
 }

@@ -48,7 +48,10 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            supervisor.startAll()
+            // 单元测试只加载目标组件，避免测试宿主启动真实模型进程。
+            if NSClassFromString("XCTestCase") == nil {
+                supervisor.startAll()
+            }
         }
     }
 
