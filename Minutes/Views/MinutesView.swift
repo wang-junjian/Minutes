@@ -8,6 +8,9 @@ struct MinutesView: View {
     @Environment(EngineSupervisor.self) private var supervisor
     @State private var isRegenerating = false
     @State private var progressText = ""
+    @State private var isEditingTitle = false
+    @State private var titleDraft = ""
+    @FocusState private var isTitleEditorFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -71,11 +74,44 @@ struct MinutesView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(meeting.title)
-                .font(.title).bold()
+            if isEditingTitle {
+                TextField("会议标题", text: $titleDraft)
+                    .font(.title).bold()
+                    .textFieldStyle(.plain)
+                    .focused($isTitleEditorFocused)
+                    .onSubmit(saveTitle)
+                    .onExitCommand {
+                        isEditingTitle = false
+                    }
+                    .onChange(of: isTitleEditorFocused) { _, isFocused in
+                        if !isFocused { saveTitle() }
+                    }
+                    .onAppear {
+                        isTitleEditorFocused = true
+                    }
+            } else {
+                Text(meeting.title)
+                    .font(.title).bold()
+                    .onTapGesture(count: 2) {
+                        titleDraft = meeting.title
+                        isEditingTitle = true
+                    }
+                    .help("双击编辑会议标题")
+            }
             Text("\(dateText) · 时长 \(Formatters.clock(meeting.duration)) · \(meeting.segments.count) 条转写")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func saveTitle() {
+        guard isEditingTitle else { return }
+        let title = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty, title != meeting.title {
+            var updated = meeting
+            updated.title = title
+            store.save(updated)
+        }
+        isEditingTitle = false
     }
 
     /// 缓存的格式化器：DateFormatter 每次创建要几毫秒，不用反复建。

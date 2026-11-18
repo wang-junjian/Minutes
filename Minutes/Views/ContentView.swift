@@ -30,6 +30,9 @@ struct ContentView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                EngineStatusControl()
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     startNewMeeting()
@@ -37,6 +40,7 @@ struct ContentView: View {
                     Label("新会议", systemImage: "record.circle")
                 }
                 .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(supervisor.states[.asr] != .ready)
             }
             ToolbarItem(placement: .automatic) {
                 Button {
@@ -45,12 +49,6 @@ struct ContentView: View {
                     Label("设置", systemImage: "gearshape")
                 }
                 .keyboardShortcut(",")
-            }
-        }
-        .onAppear {
-            // 单元测试只加载目标组件，避免测试宿主启动真实模型进程。
-            if NSClassFromString("XCTestCase") == nil {
-                supervisor.startAll()
             }
         }
     }
@@ -63,20 +61,40 @@ struct ContentView: View {
             Image(systemName: "waveform")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text("Minutes")
+            Text("纪要")
                 .font(.title)
                 .bold()
-            Text("点击「开始新会议」，全程本地转写并自动生成纪要。\n音频与文本不出本机。")
+            Text("全程本地转写并自动生成会议纪要，音频与文本不出本机。")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if supervisor.states[.asr] != .ready {
+                Text(startupHint)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             Button("开始新会议") {
                 startNewMeeting()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .keyboardShortcut(.return, modifiers: [])
+            .disabled(supervisor.states[.asr] != .ready)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var startupHint: String {
+        switch supervisor.states[.asr] ?? .stopped {
+        case .failed(let message):
+            return "语音识别模型启动失败：\(message)\n可点击工具栏的模型状态重新启动。"
+        case .stopped:
+            return "语音识别模型已停止，可点击工具栏的模型状态重新启动。"
+        case .starting:
+            return "模型正在启动，语音识别就绪后即可开始会议。"
+        case .ready:
+            return ""
+        }
     }
 
     private func startNewMeeting() {
