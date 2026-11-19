@@ -13,14 +13,6 @@ protocol MeetingTranscribing: Sendable {
 
 extension EngineClient: MeetingTranscribing {}
 
-protocol MeetingChatStreaming: Sendable {
-    func streamChat(
-        messages: [EngineClient.ChatMessage], baseURL: URL, temperature: Double
-    ) async -> AsyncThrowingStream<String, Error>
-}
-
-extension EngineClient: MeetingChatStreaming {}
-
 /// ASR 并发闸门：限制同时发往识别引擎的请求数。
 ///
 /// 固定节奏的识别请求若不加限制，突发时会压垮本地推理引擎
@@ -74,7 +66,6 @@ final class MeetingSession {
     private(set) var meeting: Meeting
     private(set) var phase: MeetingPhase = .idle
     private(set) var elapsed: TimeInterval = 0
-    private(set) var composedText: String = ""      // 纪要生成过程中的流式文本
     /// 正在识别中的中间文本（灰色显示，终稿到达后被替换）。
     private(set) var interimText: String = ""
     private(set) var errorMessage: String?
@@ -451,7 +442,6 @@ final class MeetingSession {
         unresolvedSnapshot = nil
         failedSnapshots = [:]
         interimText = ""
-        composedText = ""
         errorMessage = nil
         meeting.segments = []
         meeting.transcriptText = ""
@@ -540,7 +530,7 @@ final class MeetingSession {
             group.addTask { [weak self] in
                 guard let self else { return nil }
                 do {
-                    return try await self.collectChat(messages, streamToScreen: false)
+                    return try await self.collectChat(messages)
                 } catch {
                     Log.info("生成标题失败：\(error.localizedDescription)")
                     return nil
@@ -585,56 +575,25 @@ final class MeetingSession {
         guard isReady(.llm) else {
             throw MinutesError.engineNotReady(worker: "LLM")
         }
-        let segments = meeting.segments.sorted { $0.sequence < $1.sequence }
-        // 单次调用的转写预算：留足输出空间，2 小时会议也不会撑爆模型窗口。
-        let transcript = segments
-            .map { "[\(Formatters.stamp($0.start))] \($0.text)" }
-            .joined(separator: "\n")
-        let blocks = MinutesComposer.makeBlocks(transcript, maxChars: 12_000)
-        // 用户可在设置中自定义的纪要提示词。
-        let prompt = engineSupervisor.configuration.minutesPrompt
-
-        composedText = ""
-        do {
-            let finalText: String
-            if blocks.count <= 1 {
-                finalText = try await collectChat([
-                    EngineClient.ChatMessage(role: "system", content: prompt),
-                    EngineClient.ChatMessage(role: "user", content: MinutesComposer.userPrompt(transcript: blocks.first ?? "")),
-                ])
-            } else {
-                // 长会议 map-reduce：逐块压成素材，再把素材汇总成正式纪要。
-                // 每块 1.2 万字以内，LLM 单次调用的输入规模恒定。
-                var drafts: [String] = []
-                for (index, block) in blocks.enumerated() {
-                    composedText += "\n—— 第 \(index + 1)/\(blocks.count) 段整理 ——\n"
-                    let draft = try await collectChat([
-                        EngineClient.ChatMessage(role: "system", content: MinutesComposer.compressionSystemPrompt),
-                        EngineClient.ChatMessage(role: "user", content: "会议转写第 \(index + 1) 段（共 \(blocks.count) 段）：\n\n\(block)"),
-                    ])
-                    drafts.append("第 \(index + 1) 段：\n\(draft)")
-                }
-                composedText += "\n—— 汇总纪要 ——\n"
-                finalText = try await collectChat([
-                    EngineClient.ChatMessage(role: "system", content: prompt),
-                    EngineClient.ChatMessage(role: "user", content: MinutesComposer.userPrompt(transcript: drafts.joined(separator: "\n\n"))),
-                ])
-            }
-            meeting.minutes = MinutesComposer.parse(finalText)
-        } catch {
-            composedText += "\n\n（生成中断：\(error.localizedDescription)）"
-            throw error
-        }
+        let document = try await MinutesComposer.generate(
+            segments: meeting.segments,
+            prompt: engineSupervisor.configuration.minutesPrompt,
+            baseURL: engineSupervisor.configuration.baseURL(for: .llm),
+            chat: chat
+        )
+        meeting.minutes = document
     }
 
-    /// 发一次对话并收集流式输出。streamToScreen 为 true 时全程追加到
-    /// composedText 实时上屏（纪要生成）；起标题这类旁路调用传 false。
-    private func collectChat(_ messages: [EngineClient.ChatMessage], streamToScreen: Bool = true) async throws -> String {
+    /// 起标题旁路调用：收集一次完整对话，不参与纪要工作流。
+    private func collectChat(_ messages: [EngineClient.ChatMessage]) async throws -> String {
         var output = ""
-        for try await token in await chat.streamChat(messages: messages, baseURL: engineSupervisor.configuration.baseURL(for: .llm), temperature: 0.3) {
+        for try await token in await chat.streamChat(
+            messages: messages, baseURL: engineSupervisor.configuration.baseURL(for: .llm), temperature: 0.3
+        ) {
+            try Task.checkCancellation()
             output += token
-            if streamToScreen { composedText += token }
         }
+        try Task.checkCancellation()
         return output
     }
 

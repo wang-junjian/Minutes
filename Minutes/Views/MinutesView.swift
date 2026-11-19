@@ -8,6 +8,7 @@ struct MinutesView: View {
     @Environment(EngineSupervisor.self) private var supervisor
     @State private var isRegenerating = false
     @State private var progressText = ""
+    @State private var regenerationError: String?
     @State private var isEditingTitle = false
     @State private var titleDraft = ""
     @FocusState private var isTitleEditorFocused: Bool
@@ -18,6 +19,11 @@ struct MinutesView: View {
                 header
                 if let errorMessage = store.errorMessage {
                     Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if let regenerationError {
+                    Text(regenerationError)
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
@@ -47,7 +53,7 @@ struct MinutesView: View {
                 } label: {
                     Label("重新生成", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .disabled(isRegenerating || transcript.isEmpty || supervisor.states[.llm] != .ready)
+                .disabled(isRegenerating || meeting.segments.isEmpty || supervisor.states[.llm] != .ready)
                 .help("使用当前提示词设置重新生成纪要")
             }
         }
@@ -63,14 +69,24 @@ struct MinutesView: View {
     private func regenerate() {
         let prompt = supervisor.configuration.minutesPrompt
         let baseURL = supervisor.configuration.baseURL(for: .llm)
-        let transcript = self.transcript
         Task {
             isRegenerating = true
+            progressText = ""
+            regenerationError = nil
             defer { isRegenerating = false }
-            guard let document = await MinutesComposer.generate(
-                transcript: transcript, prompt: prompt, baseURL: baseURL,
-                onProgress: { self.progressText = $0 }
-            ) else { return }
+            let document: MinutesDocument
+            do {
+                document = try await MinutesComposer.generate(
+                    segments: meeting.segments, prompt: prompt, baseURL: baseURL,
+                    onProgress: { self.progressText = Self.progressText(for: $0) }
+                )
+            } catch is CancellationError {
+                regenerationError = "重新生成已取消。"
+                return
+            } catch {
+                regenerationError = "重新生成失败：\(error.localizedDescription)"
+                return
+            }
             var updated = meeting
             updated.minutes = document
             do {
@@ -78,6 +94,17 @@ struct MinutesView: View {
             } catch {
                 Log.error("保存重新生成的纪要失败：\(error.localizedDescription)")
             }
+        }
+    }
+
+    private static func progressText(for stage: MinutesComposer.Stage) -> String {
+        switch stage {
+        case .generating:
+            return "正在生成纪要…"
+        case .mapping(let index, let total):
+            return "正在整理第 \(index)/\(total) 段…"
+        case .reducing:
+            return "正在汇总纪要…"
         }
     }
 

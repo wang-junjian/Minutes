@@ -560,6 +560,35 @@ final class MeetingSessionTests: XCTestCase {
         XCTAssertFalse(capture.isRunning)
     }
 
+    func testDiscardDuringMinutesDoesNotSavePartialResult() async throws {
+        let store = makeStore()
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let transcriber = TranscriberStub()
+        let chat = ChatStub()
+        chat.suspendNextMinutesRequest()
+        let session = MeetingSession(
+            store: store, capture: capture, transcriber: transcriber, chat: chat,
+            readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+        capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+
+        let finishing = Task { await session.finish() }
+        await waitUntil { await transcriber.requestCount() == 1 }
+        await transcriber.resolveRequest(at: 0, text: "已经定稿的内容。")
+        await waitUntil { session.phase == .composing && chat.requestCount() == 1 }
+
+        await session.discard()
+        await finishing.value
+
+        XCTAssertEqual(session.phase, .idle)
+        XCTAssertNil(session.meeting.minutes)
+        XCTAssertTrue(store.meetings.isEmpty)
+    }
+
     func testSlowTitleFallsBackWithoutBlockingSave() async throws {
         let store = makeStore()
         let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
@@ -663,16 +692,22 @@ private final class ChatStub: MeetingChatStreaming, @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [[EngineClient.ChatMessage]] = []
     private var minutesFailuresRemaining = 0
+    private var minutesSuspensionsRemaining = 0
     private var titleDelayNanoseconds: UInt64 = 0
 
     func streamChat(
         messages: [EngineClient.ChatMessage], baseURL: URL, temperature: Double
-    ) async -> AsyncThrowingStream<String, Error> {
+    ) async -> EngineClient.ChatStream {
         let isTitle = messages.first?.content.contains("概括会议主题") == true
         let shouldFail = lock.withLock { () -> Bool in
             requests.append(messages)
             guard !isTitle, minutesFailuresRemaining > 0 else { return false }
             minutesFailuresRemaining -= 1
+            return true
+        }
+        let shouldSuspend = lock.withLock { () -> Bool in
+            guard !isTitle, minutesSuspensionsRemaining > 0 else { return false }
+            minutesSuspensionsRemaining -= 1
             return true
         }
         let output = isTitle ? "测试标题" : "## 摘要\n测试摘要\n\n## 决议\n\n## 行动项\n\n## 关键词"
@@ -681,7 +716,7 @@ private final class ChatStub: MeetingChatStreaming, @unchecked Sendable {
             defer { titleDelayNanoseconds = 0 }
             return titleDelayNanoseconds
         }
-        return AsyncThrowingStream { continuation in
+        let stream = AsyncThrowingStream<String, Error> { continuation in
             if isTitle, titleDelay > 0 {
                 let task = Task {
                     do {
@@ -693,6 +728,8 @@ private final class ChatStub: MeetingChatStreaming, @unchecked Sendable {
                     }
                 }
                 continuation.onTermination = { _ in task.cancel() }
+            } else if shouldSuspend {
+                continuation.yield("## 摘要\n不应保存的部分摘要")
             } else if shouldFail {
                 continuation.finish(throwing: StubError.minutesFailed)
             } else {
@@ -700,10 +737,15 @@ private final class ChatStub: MeetingChatStreaming, @unchecked Sendable {
                 continuation.finish()
             }
         }
+        return EngineClient.ChatStream(stream)
     }
 
     func failNextMinutesRequest() {
         lock.withLock { minutesFailuresRemaining += 1 }
+    }
+
+    func suspendNextMinutesRequest() {
+        lock.withLock { minutesSuspensionsRemaining += 1 }
     }
 
     func delayNextTitle(nanoseconds: UInt64) {
