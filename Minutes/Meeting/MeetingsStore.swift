@@ -7,25 +7,37 @@ final class MeetingsStore {
     static let shared = MeetingsStore()
 
     private(set) var meetings: [Meeting] = []
+    private(set) var errorMessage: String?
 
     private let directory: URL
 
-    init() {
+    convenience init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        directory = appSupport.appendingPathComponent("Minutes/Meetings", isDirectory: true)
+        let directory = appSupport.appendingPathComponent("Minutes/Meetings", isDirectory: true)
+        self.init(directory: directory)
+    }
+
+    init(directory: URL) {
+        self.directory = directory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         load()
     }
 
     func reload() { load() }
 
-    func save(_ meeting: Meeting) {
-        if let index = meetings.firstIndex(where: { $0.id == meeting.id }) {
-            meetings[index] = meeting
-        } else {
-            meetings.insert(meeting, at: 0)
+    func save(_ meeting: Meeting) throws {
+        do {
+            try write(meeting)
+            if let index = meetings.firstIndex(where: { $0.id == meeting.id }) {
+                meetings[index] = meeting
+            } else {
+                meetings.insert(meeting, at: 0)
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = "保存会议失败：\(error.localizedDescription)"
+            throw error
         }
-        write(meeting)
     }
 
     func delete(_ meeting: Meeting) {
@@ -41,12 +53,12 @@ final class MeetingsStore {
         directory.appendingPathComponent("\(meeting.id.uuidString).json")
     }
 
-    private func write(_ meeting: Meeting) {
+    private func write(_ meeting: Meeting) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(meeting) else { return }
-        try? data.write(to: fileURL(for: meeting), options: .atomic)
+        let data = try encoder.encode(meeting)
+        try data.write(to: fileURL(for: meeting), options: .atomic)
     }
 
     private func load() {
