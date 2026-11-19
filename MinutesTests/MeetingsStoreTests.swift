@@ -34,6 +34,59 @@ final class MeetingsStoreTests: XCTestCase {
         XCTAssertNotNil(store.errorMessage)
     }
 
+    func testDeleteRemovesMemoryAndDiskWithoutResurrectingOnReload() throws {
+        let directory = makeDirectory()
+        let store = MeetingsStore(directory: directory)
+        let meeting = Meeting(id: UUID(), title: "待删除会议")
+        try store.save(meeting)
+
+        try store.delete(meeting)
+
+        XCTAssertTrue(store.meetings.isEmpty)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL(for: meeting, in: directory).path))
+        XCTAssertTrue(MeetingsStore(directory: directory).meetings.isEmpty)
+    }
+
+    func testFailedDeleteKeepsMeetingAndCanBeRetried() throws {
+        let directory = makeDirectory()
+        let store = MeetingsStore(directory: directory)
+        let meeting = Meeting(id: UUID(), title: "不能静默删除")
+        try store.save(meeting)
+        let file = fileURL(for: meeting, in: directory)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+
+        XCTAssertThrowsError(try store.delete(meeting))
+
+        XCTAssertEqual(store.meetings, [meeting])
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        try store.delete(meeting)
+        XCTAssertTrue(store.meetings.isEmpty)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testDeleteTreatsAlreadyMissingFileAsSuccess() throws {
+        let directory = makeDirectory()
+        let store = MeetingsStore(directory: directory)
+        let meeting = Meeting(id: UUID(), title: "已经不在磁盘")
+        try store.save(meeting)
+        try FileManager.default.removeItem(at: fileURL(for: meeting, in: directory))
+
+        try store.delete(meeting)
+
+        XCTAssertTrue(store.meetings.isEmpty)
+        XCTAssertNil(store.errorMessage)
+    }
+
+    private func fileURL(for meeting: Meeting, in directory: URL) -> URL {
+        directory.appendingPathComponent("\(meeting.id.uuidString).json")
+    }
+
     private func makeDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingsStoreTests-\(UUID().uuidString)", isDirectory: true)

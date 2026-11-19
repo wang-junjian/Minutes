@@ -43,7 +43,8 @@ struct SidebarView: View {
                     }
                 }
                 .onDelete { indexSet in
-                    for index in indexSet { store.delete(store.meetings[index]) }
+                    let targets = indexSet.map { store.meetings[$0] }
+                    for meeting in targets { delete(meeting) }
                 }
             }
         }
@@ -69,12 +70,20 @@ struct SidebarView: View {
         ) {
             Button("删除", role: .destructive) {
                 if let meeting = pendingDeletion {
-                    if selection == meeting.id { selection = nil }
-                    store.delete(meeting)
+                    delete(meeting)
                 }
                 pendingDeletion = nil
             }
             Button("取消", role: .cancel) { pendingDeletion = nil }
+        }
+    }
+
+    private func delete(_ meeting: Meeting) {
+        do {
+            try store.delete(meeting)
+            if selection == meeting.id { selection = nil }
+        } catch {
+            Log.error("删除会议失败：\(error.localizedDescription)")
         }
     }
 

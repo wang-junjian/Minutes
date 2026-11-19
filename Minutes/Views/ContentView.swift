@@ -15,12 +15,22 @@ struct ContentView: View {
             SidebarView(selection: $selection)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 260)
         } detail: {
-            if let session, session.phase != .idle, session.phase != .completed {
-                LiveMeetingView(session: session)
-            } else if let selected = store.meetings.first(where: { $0.id == selection }) {
-                MinutesView(meeting: selected)
-            } else {
-                emptyState
+            VStack(spacing: 0) {
+                if let errorMessage = store.errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 10)
+                }
+                if let session, session.phase != .idle, session.phase != .completed {
+                    LiveMeetingView(session: session)
+                } else if let selected = store.meetings.first(where: { $0.id == selection }) {
+                    MinutesView(meeting: selected)
+                } else {
+                    emptyState
+                }
             }
         }
         .onChange(of: session?.phase) { _, newPhase in

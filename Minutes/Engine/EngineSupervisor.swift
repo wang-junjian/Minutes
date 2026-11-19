@@ -34,6 +34,12 @@ final class EngineSupervisor {
         }
     }
 
+    func startAllForApplicationLaunch() {
+        for kind in EngineWorkerKind.allCases {
+            workers[kind]?.startForApplicationLaunch()
+        }
+    }
+
     func startAll() {
         for kind in EngineWorkerKind.allCases {
             workers[kind]?.start()
