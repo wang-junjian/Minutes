@@ -12,8 +12,8 @@ final class MeetingAudioPlayer {
     let duration: TimeInterval
     private var timer: Timer?
 
-    init?(url: URL) {
-        guard let player = try? AVAudioPlayer(contentsOf: url) else { return nil }
+    init?(data: Data) {
+        guard let player = try? AVAudioPlayer(data: data) else { return nil }
         self.player = player
         player.enableRate = true
         player.prepareToPlay()
@@ -72,16 +72,27 @@ struct MeetingAudioView: View {
     @Environment(MeetingsStore.self) private var store
     @State private var player: MeetingAudioPlayer?
     @State private var hasAudio = false
+    @State private var isPreparingAudio = false
     @State private var audioDeleted = false
     @State private var confirmsDeletion = false
     @State private var rate: Float = 1
 
     var body: some View {
-        Group {
-            if hasAudio, let player {
+        // 容器必须始终存在：初始为空的 Group 不会承载 task，导致音频永远不被加载。
+        VStack(alignment: .leading) {
+            if isPreparingAudio {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在准备音频…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if hasAudio, let player {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("会议音频", systemImage: "play.circle")
                         .font(.title3).bold()
+                        .help("低音量录音会自动增强播放，原始 WAV 文件保持不变")
                     HStack(spacing: 12) {
                         Button { player.toggle() } label: {
                             Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
@@ -114,6 +125,14 @@ struct MeetingAudioView: View {
                     }
                     .font(.caption)
                 }
+            } else if hasAudio {
+                Label("音频文件无法播放，可在 Finder 中检查。", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("在 Finder 中显示") {
+                    NSWorkspace.shared.activateFileViewerSelecting([store.audioURL(for: meeting)])
+                }
+                .font(.caption)
             } else if audioDeleted {
                 Label("音频已删除，仅保留转写与纪要。", systemImage: "speaker.slash")
                     .font(.caption)
@@ -121,10 +140,25 @@ struct MeetingAudioView: View {
             }
         }
         .task(id: meeting.id) {
+            player?.stop()
+            player = nil
             let url = store.audioURL(for: meeting)
             hasAudio = FileManager.default.fileExists(atPath: url.path)
             audioDeleted = false
-            player = hasAudio ? MeetingAudioPlayer(url: url) : nil
+            isPreparingAudio = hasAudio
+            guard hasAudio else { return }
+            defer { if !Task.isCancelled { isPreparingAudio = false } }
+            do {
+                // 长会议的扫描与放大在后台执行，避免选中历史记录时阻塞界面。
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try MeetingAudioNormalizer.normalizedData(at: url)
+                }.value
+                try Task.checkCancellation()
+                player = MeetingAudioPlayer(data: data)
+            } catch is CancellationError {
+            } catch {
+                Log.error("准备会议音频失败：\(error.localizedDescription)")
+            }
         }
         .onDisappear { player?.stop() }
         .confirmationDialog("删除会议音频？", isPresented: $confirmsDeletion, titleVisibility: .visible) {
