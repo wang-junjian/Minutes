@@ -40,6 +40,22 @@ final class MeetingsStore {
         }
     }
 
+    func audioURL(for meeting: Meeting) -> URL {
+        directory.appendingPathComponent("\(meeting.id.uuidString).wav")
+    }
+
+    /// 单独删除会议音频以释放空间，转写与纪要保留；文件已不存在视为成功。
+    func deleteAudio(for meeting: Meeting) throws {
+        do {
+            try FileManager.default.removeItem(at: audioURL(for: meeting))
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+        } catch {
+            errorMessage = "删除音频失败：\(error.localizedDescription)"
+            throw error
+        }
+        errorMessage = nil
+    }
+
     func delete(_ meeting: Meeting) throws {
         do {
             try FileManager.default.removeItem(at: fileURL(for: meeting))
@@ -49,6 +65,9 @@ final class MeetingsStore {
             errorMessage = "删除会议失败：\(error.localizedDescription)"
             throw error
         }
+        // 级联清理附属文件，避免留下无人管理的残留（ADR-0002）。
+        try? FileManager.default.removeItem(at: audioURL(for: meeting))
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(meeting.id.uuidString).draft"))
         meetings.removeAll { $0.id == meeting.id }
         errorMessage = nil
     }

@@ -17,6 +17,7 @@ struct MinutesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
+                MeetingAudioView(meeting: meeting)
                 if let regenerationError {
                     Text(regenerationError)
                         .font(.caption)

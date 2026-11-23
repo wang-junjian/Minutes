@@ -83,6 +83,54 @@ final class MeetingsStoreTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
+    func testDeleteAlsoRemovesAudioAndDraft() throws {
+        let directory = makeDirectory()
+        let store = MeetingsStore(directory: directory)
+        let meeting = Meeting(id: UUID(), title: "级联删除")
+        try store.save(meeting)
+        let audioURL = directory.appendingPathComponent("\(meeting.id.uuidString).wav")
+        let draftURL = directory.appendingPathComponent("\(meeting.id.uuidString).draft")
+        FileManager.default.createFile(atPath: audioURL.path, contents: Data([0, 1]))
+        FileManager.default.createFile(atPath: draftURL.path, contents: Data([2]))
+
+        try store.delete(meeting)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path))
+        XCTAssertTrue(store.meetings.isEmpty)
+    }
+
+    func testDeleteAudioKeepsMeetingAndTranscript() throws {
+        let directory = makeDirectory()
+        let store = MeetingsStore(directory: directory)
+        let meeting = Meeting(
+            id: UUID(), title: "释放空间", createdAt: Date(timeIntervalSince1970: 1_000),
+            transcriptText: "转写保留"
+        )
+        try store.save(meeting)
+        let audioURL = directory.appendingPathComponent("\(meeting.id.uuidString).wav")
+        FileManager.default.createFile(atPath: audioURL.path, contents: Data([0, 1]))
+
+        try store.deleteAudio(for: meeting)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path))
+        XCTAssertEqual(store.meetings, [meeting])
+        XCTAssertEqual(MeetingsStore(directory: directory).meetings, [meeting])
+        XCTAssertNil(store.errorMessage)
+    }
+
+    func testDeleteAudioTreatsMissingFileAsSuccess() throws {
+        let directory = makeDirectory()
+        let store = MeetingsStore(directory: directory)
+        let meeting = Meeting(id: UUID(), title: "无音频旧会议")
+        try store.save(meeting)
+
+        try store.deleteAudio(for: meeting)
+
+        XCTAssertEqual(store.meetings, [meeting])
+        XCTAssertNil(store.errorMessage)
+    }
+
     private func fileURL(for meeting: Meeting, in directory: URL) -> URL {
         directory.appendingPathComponent("\(meeting.id.uuidString).json")
     }
