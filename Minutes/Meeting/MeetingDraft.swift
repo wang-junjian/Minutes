@@ -43,4 +43,17 @@ final class MeetingDraftStore {
     func delete(id: UUID) {
         try? FileManager.default.removeItem(at: url(for: id))
     }
+
+    /// 中断扫描：全部草稿快照（损坏文件跳过），按开始时间升序。
+    func loadAll() -> [MeetingDraft] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil
+        ) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return files
+            .filter { $0.pathExtension == "draft" }
+            .compactMap { try? decoder.decode(MeetingDraft.self, from: Data(contentsOf: $0)) }
+            .sorted { $0.meeting.createdAt < $1.meeting.createdAt }
+    }
 }

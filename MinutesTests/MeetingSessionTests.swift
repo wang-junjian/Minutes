@@ -810,6 +810,67 @@ final class MeetingSessionTests: XCTestCase {
         await session.pause()
     }
 
+    func testRestoredSessionResumesWithoutReTranscribingFinalizedAudio() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingsStore(directory: directory)
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let transcriber = TranscriberStub()
+        let session = MeetingSession(
+            store: store, capture: capture, transcriber: transcriber,
+            readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+        let chunk = Array(repeating: Float(0.1), count: 24_000) // 1.5 秒
+        for index in 0..<4 {
+            capture.yield(samples: chunk)
+            await waitUntil { await transcriber.requestCount() == index + 1 }
+            if index < 3 {
+                await transcriber.resolveRequest(at: index, text: "仍在说")
+                await waitUntil { session.interimText == "仍在说" }
+            }
+        }
+        await transcriber.resolveRequest(at: 3, text: "第一段。")
+        await waitUntil { session.meeting.segments.count == 1 }
+        capture.yield(samples: Array(repeating: Float(0.1), count: 16_000), rms: 0.5) // 未识别尾部 1 秒
+        await waitUntil { session.energyRing.last == 1 }
+        await session.pause()
+
+        // 模拟崩溃后重启：从草稿快照与 WAV 恢复会话。
+        let draft = try XCTUnwrap(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        let resumedCapture = ScriptedCapture()
+        let resumedTranscriber = TranscriberStub()
+        let restored = try MeetingSession(
+            restoring: draft, store: store, capture: resumedCapture,
+            transcriber: resumedTranscriber, chat: ChatStub(),
+            readiness: { _ in true }, now: { clock.now }
+        )
+        XCTAssertEqual(restored.phase, .paused) // 恢复到暂停态，手动继续才开麦
+        XCTAssertEqual(restored.meeting.segments.map(\.text), ["第一段。"])
+        XCTAssertEqual(restored.meeting.createdAt, session.meeting.createdAt)
+        XCTAssertEqual(restored.meeting.duration, session.meeting.duration)
+
+        await restored.resume()
+        await waitUntil { resumedCapture.isRunning }
+        resumedCapture.yield(samples: Array(repeating: Float(0.1), count: 8_000)) // 尾部凑满 1.5 秒
+        await waitUntil { await resumedTranscriber.requestCount() == 1 }
+        // 只提交未识别尾部与新音频，不重复已落定的 6 秒。
+        let submitted = await resumedTranscriber.sampleCount(at: 0)
+        XCTAssertEqual(submitted, 24_000)
+        await resumedTranscriber.resolveRequest(at: 0, text: "尾部")
+        await waitUntil { restored.interimText == "尾部" }
+
+        resumedCapture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.04)
+        await waitUntil { abs((restored.energyRing.last ?? 0) - 0.48) < 0.001 }
+        await restored.pause()
+        // 续录追加同一 WAV：7 秒旧音频 + 1 秒新音频。
+        let audioURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).wav")
+        XCTAssertEqual(try Data(contentsOf: audioURL).count, 44 + (112_000 + 16_000) * 2)
+    }
+
     private func makeFailingStore() -> (MeetingsStore, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)

@@ -49,6 +49,16 @@ final class MeetingAudioFile {
         try repairHeader(handle: handle)
     }
 
+    /// 读取全部采样（恢复续录重建缓冲用）；文件缺失或不足头部时返回空。
+    static func readSamples(at url: URL) throws -> [Float] {
+        guard let data = try? Data(contentsOf: url), data.count >= 44 else { return [] }
+        let payload = data.dropFirst(44).prefix((data.count - 44) / 2 * 2)
+        return payload.withUnsafeBytes { raw in
+            let ints = raw.bindMemory(to: Int16.self)
+            return ints.map { Float(Int16(littleEndian: $0)) / 32_767 }
+        }
+    }
+
     private static func repairHeader(handle: FileHandle) throws {
         let size = try handle.seekToEnd()
         // 崩溃可能写在 PCM16 采样中间：残缺尾字节向下取偶并截断。

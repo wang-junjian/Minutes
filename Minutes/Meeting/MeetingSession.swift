@@ -381,6 +381,39 @@ final class MeetingSession {
         self.meeting = Meeting(title: "")
     }
 
+    /// 从中断会议恢复（ADR-0002）：修复 WAV 头部，按草稿恢复正式片段与时长，
+    /// 从已落定位置读入未识别尾部重建缓冲；恢复到暂停态，由用户显式继续。
+    convenience init(
+        restoring draft: MeetingDraft,
+        store: MeetingsStore,
+        engineSupervisor: EngineSupervisor = .shared,
+        capture: any MeetingAudioCapturing = AudioCaptureService(),
+        transcriber: any MeetingTranscribing = EngineClient.shared,
+        chat: any MeetingChatStreaming = EngineClient.shared,
+        readiness: ((EngineWorkerKind) -> Bool)? = nil,
+        now: @escaping () -> Date = Date.init,
+        titleTimeout: TimeInterval = 2,
+        draftInterval: TimeInterval = 15
+    ) throws {
+        let audioURL = store.directory.appendingPathComponent("\(draft.meeting.id.uuidString).wav")
+        try MeetingAudioFile.repair(at: audioURL)
+        let samples = try MeetingAudioFile.readSamples(at: audioURL)
+        self.init(
+            store: store, engineSupervisor: engineSupervisor, capture: capture,
+            transcriber: transcriber, chat: chat, readiness: readiness,
+            now: now, titleTimeout: titleTimeout, draftInterval: draftInterval
+        )
+        meeting = draft.meeting
+        phase = .paused
+        hasStarted = true
+        recordedSampleCount = samples.count
+        let tailStart = min(draft.bufferStartSample, samples.count)
+        buffer = Array(samples[tailStart...])
+        bufferStart = Double(tailStart) / 16_000
+        bufferEnd = Double(samples.count) / 16_000
+        elapsed = meeting.duration
+    }
+
     var isLive: Bool { phase == .live }
 
     private func isReady(_ kind: EngineWorkerKind) -> Bool {

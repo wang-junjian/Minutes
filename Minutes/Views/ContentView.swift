@@ -9,6 +9,9 @@ struct ContentView: View {
     let appDelegate: AppDelegate
 
     @State private var selection: Meeting.ID?
+    @State private var interrupted: [MeetingDraft] = []
+    @State private var recoveryDismissed = false
+    @State private var recoveryError: String?
 
     var body: some View {
         NavigationSplitView {
@@ -63,7 +66,24 @@ struct ContentView: View {
             }
         }
         .background(WindowLifecycleBridge(appDelegate: appDelegate))
-        .onAppear { appDelegate.session = session }
+        .onAppear {
+            appDelegate.session = session
+            // 草稿快照存在即中断信号（ADR-0002）；历史列表只含已完成会议。
+            interrupted = MeetingDraftStore(directory: store.directory).loadAll()
+        }
+        .sheet(isPresented: Binding(
+            get: { !interrupted.isEmpty && !recoveryDismissed && session == nil },
+            set: { if !$0 { recoveryDismissed = true } }
+        )) {
+            RecoveryView(
+                drafts: interrupted,
+                errorMessage: recoveryError,
+                onResume: { draft in restoreInterrupted(draft, finish: false) },
+                onFinish: { draft in restoreInterrupted(draft, finish: true) },
+                onDiscard: discardInterrupted,
+                onLater: { recoveryDismissed = true }
+            )
+        }
         .onChange(of: session.map { ObjectIdentifier($0) }) { _, _ in
             appDelegate.session = session
         }
@@ -125,5 +145,28 @@ struct ContentView: View {
         session = newSession
         selection = nil
         newSession.start()
+    }
+
+    /// 恢复中断会议：暂停态进入实时视图；选择结束时直接走结束事务。
+    private func restoreInterrupted(_ draft: MeetingDraft, finish: Bool) {
+        do {
+            let restored = try MeetingSession(restoring: draft, store: store)
+            session = restored
+            recoveryDismissed = true
+            recoveryError = nil
+            if finish {
+                Task { await restored.finish() }
+            }
+        } catch {
+            recoveryError = "恢复会议失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 放弃中断会议：级联删除草稿与音频，其余中断会议可继续处理。
+    private func discardInterrupted(_ draft: MeetingDraft) {
+        MeetingDraftStore(directory: store.directory).delete(id: draft.meeting.id)
+        let audioURL = store.directory.appendingPathComponent("\(draft.meeting.id.uuidString).wav")
+        try? FileManager.default.removeItem(at: audioURL)
+        interrupted.removeAll { $0.meeting.id == draft.meeting.id }
     }
 }
