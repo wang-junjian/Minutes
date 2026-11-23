@@ -16,6 +16,11 @@ struct MinutesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
+                if let errorMessage = store.errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
                 if isRegenerating {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -68,7 +73,11 @@ struct MinutesView: View {
             ) else { return }
             var updated = meeting
             updated.minutes = document
-            store.save(updated)
+            do {
+                try store.save(updated)
+            } catch {
+                Log.error("保存重新生成的纪要失败：\(error.localizedDescription)")
+            }
         }
     }
 
@@ -109,7 +118,11 @@ struct MinutesView: View {
         if !title.isEmpty, title != meeting.title {
             var updated = meeting
             updated.title = title
-            store.save(updated)
+            do {
+                try store.save(updated)
+            } catch {
+                Log.error("保存会议标题失败：\(error.localizedDescription)")
+            }
         }
         isEditingTitle = false
     }

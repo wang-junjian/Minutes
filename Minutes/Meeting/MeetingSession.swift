@@ -1,5 +1,26 @@
 import Foundation
 
+protocol MeetingAudioCapturing: AnyObject {
+    func start() throws -> AsyncStream<CapturedChunk>
+    func stop()
+}
+
+extension AudioCaptureService: MeetingAudioCapturing {}
+
+protocol MeetingTranscribing: Sendable {
+    func transcribe(_ samples: [Float], baseURL: URL) async throws -> EngineClient.ASRResult
+}
+
+extension EngineClient: MeetingTranscribing {}
+
+protocol MeetingChatStreaming: Sendable {
+    func streamChat(
+        messages: [EngineClient.ChatMessage], baseURL: URL, temperature: Double
+    ) async -> AsyncThrowingStream<String, Error>
+}
+
+extension EngineClient: MeetingChatStreaming {}
+
 /// ASR 并发闸门：限制同时发往识别引擎的请求数。
 ///
 /// 固定节奏的识别请求若不加限制，突发时会压垮本地推理引擎
@@ -57,21 +78,38 @@ final class MeetingSession {
     /// 正在识别中的中间文本（灰色显示，终稿到达后被替换）。
     private(set) var interimText: String = ""
     private(set) var errorMessage: String?
+    private(set) var isTransitioning = false
+
+    enum FinishStage: String, Sendable {
+        case transcribing
+        case composing
+        case saving
+    }
+
+    private(set) var finishStage: FinishStage?
 
     /// 波形能量环，供实时界面绘制（0 被覆盖旧值）。
     private(set) var energyRing: [Float] = Array(repeating: 0, count: 60)
 
     let engineSupervisor: EngineSupervisor
-    private let capture = AudioCaptureService()
-    private let client = EngineClient.shared
+    private let capture: any MeetingAudioCapturing
+    private let transcriber: any MeetingTranscribing
+    private let chat: any MeetingChatStreaming
     private let store: MeetingsStore
+    private let readiness: ((EngineWorkerKind) -> Bool)?
+    private let now: () -> Date
+    private let titleTimeout: TimeInterval
+    private var hasStarted = false
+    private var recordingStartedAt: Date?
+    private var recordedSampleCount = 0
 
     private let gate = TranscriptionGate(limit: 2)
     private var pipelineTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
-    private var sequenceCounter = 0
-    private var pendingSequences: [Int: TranscriptSegment] = [:]
-    private var nextExpectedSequence = 0
+    private var finishTask: Task<Void, Never>?
+    private var recognitionTasks: [Int: Task<Void, Never>] = [:]
+    private var transcriptFinalized = false
+    private var isDiscarding = false
 
     // MARK: - 节奏分段缓冲（无 VAD）
     //
@@ -96,6 +134,29 @@ final class MeetingSession {
     private let bufferCapSeconds: TimeInterval = 60
     private static let terminalPunctuation: String = "。！？!?；;…"
 
+    private struct RecognitionSnapshot {
+        let id: Int
+        let samples: [Float]
+        let start: TimeInterval
+        let end: TimeInterval
+        let generation: Int
+    }
+
+    private var nextSnapshotID = 0
+    private var latestSnapshotID = 0
+    private var failedSnapshots: [Int: RecognitionSnapshot] = [:]
+    private var unresolvedSnapshot: RecognitionSnapshot?
+
+    private func makeSnapshot() -> RecognitionSnapshot {
+        nextSnapshotID += 1
+        let snapshot = RecognitionSnapshot(
+            id: nextSnapshotID, samples: buffer, start: bufferStart, end: bufferEnd,
+            generation: interimGeneration
+        )
+        latestSnapshotID = snapshot.id
+        return snapshot
+    }
+
     private func appendToBuffer(_ chunk: CapturedChunk, offset: TimeInterval) {
         if buffer.isEmpty { bufferStart = offset }
         buffer.append(contentsOf: chunk.samples)
@@ -109,87 +170,155 @@ final class MeetingSession {
         }
         if bufferLength - lastPollAt >= pollInterval {
             lastPollAt = bufferLength
-            Task { await self.pollRecognition() }
+            let snapshot = makeSnapshot()
+            let task = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.pollRecognition(snapshot)
+            }
+            recognitionTasks[snapshot.id] = task
         }
     }
 
     /// 按节奏送当前缓冲识别；结果上屏并判断是否切段。
-    private func pollRecognition() async {
-        guard !buffer.isEmpty else { return }
-        guard engineSupervisor.states[.asr] == .ready else { return }
-        // 快照缓冲：识别期间缓冲继续增长，互不影响。
-        let samples = buffer
-        let generation = interimGeneration
+    private func pollRecognition(_ snapshot: RecognitionSnapshot) async {
+        defer { recognitionTasks[snapshot.id] = nil }
+        guard snapshot.generation == interimGeneration, !buffer.isEmpty else { return }
+        guard isReady(.asr) else { return }
         guard await gate.tryAcquire() else { return }
-        let text: String
+        let result: EngineClient.ASRResult
         do {
-            let result = try await client.transcribe(samples, baseURL: engineSupervisor.configuration.baseURL(for: .asr))
-            text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            result = try await transcriber.transcribe(
+                snapshot.samples, baseURL: engineSupervisor.configuration.baseURL(for: .asr)
+            )
         } catch {
             await gate.release()
+            if snapshot.generation == interimGeneration {
+                failedSnapshots[snapshot.id] = snapshot
+            }
             Log.info("节奏识别失败（可忽略）：\(error.localizedDescription)")
             return
         }
         await gate.release()
-        guard generation == interimGeneration else { return }   // 缓冲已被切段/冲刷，结果作废
+        applyRecognitionResult(result, to: snapshot)
+    }
 
-        let bufferLength = bufferEnd - bufferStart
+    private func applyRecognitionResult(_ result: EngineClient.ASRResult, to snapshot: RecognitionSnapshot) {
+        guard snapshot.generation == interimGeneration else { return }
+        failedSnapshots = failedSnapshots.filter { $0.value.end > snapshot.end }
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let snapshotLength = snapshot.end - snapshot.start
         let endsAtSentence = text.count >= 2 && Self.terminalPunctuation.contains(text.last ?? " ")
-        if (endsAtSentence && bufferLength >= minCloseSeconds) || bufferLength >= maxSegmentSeconds {
-            closeSegment(text: text, start: bufferStart, end: bufferEnd)
-        } else if !text.isEmpty {
+        if ((endsAtSentence && snapshotLength >= minCloseSeconds) || snapshotLength >= maxSegmentSeconds),
+           snapshot.start == bufferStart {
+            closeSegment(text: text, snapshot: snapshot, language: result.language)
+        } else if !text.isEmpty, snapshot.id == latestSnapshotID {
             interimText = text
         }
     }
 
-    /// 落定当前分段：有字落字，无字仅重置缓冲（长静音不产生空段）。
-    private func closeSegment(text: String, start: TimeInterval, end: TimeInterval) {
+    private func retryUnresolvedRecognition() async throws {
+        guard let snapshot = unresolvedSnapshot else { return }
+        guard isReady(.asr) else { throw MinutesError.engineNotReady(worker: "ASR") }
+        await gate.acquire()
+        let result: EngineClient.ASRResult
+        do {
+            result = try await transcriber.transcribe(
+                snapshot.samples, baseURL: engineSupervisor.configuration.baseURL(for: .asr)
+            )
+        } catch {
+            await gate.release()
+            throw error
+        }
+        await gate.release()
+        applyRecognitionResult(result, to: snapshot)
+        unresolvedSnapshot = nil
+        failedSnapshots = [:]
+    }
+
+    private func drainRecognitionTasks() async {
+        while !recognitionTasks.isEmpty {
+            let tasks = Array(recognitionTasks.values)
+            for task in tasks { await task.value }
+        }
+    }
+
+    /// 只落定快照覆盖的前缀；识别期间新到的音频留给下一段。
+    private func closeSegment(text: String, snapshot: RecognitionSnapshot, language: String?) {
         interimText = ""
         interimGeneration += 1
         lastPollAt = 0
         if !text.isEmpty {
             appendSegment(TranscriptSegment(
+                start: snapshot.start, end: snapshot.end, text: text,
+                language: language, sequence: 0
+            ))
+        }
+        let consumed = min(snapshot.samples.count, buffer.count)
+        buffer.removeFirst(consumed)
+        bufferStart = snapshot.end
+        if buffer.isEmpty { bufferEnd = snapshot.end }
+    }
+
+    /// 会议结束时冲刷缓冲里的剩余音频；失败时保留音频供结束事务重试。
+    private func flushBuffer() async throws {
+        guard !buffer.isEmpty else { return }
+        interimGeneration += 1
+        guard isReady(.asr) else { throw MinutesError.engineNotReady(worker: "ASR") }
+        let samples = buffer
+        let start = bufferStart
+        let end = bufferEnd
+        await gate.acquire()
+        let result: EngineClient.ASRResult
+        do {
+            result = try await transcriber.transcribe(
+                samples, baseURL: engineSupervisor.configuration.baseURL(for: .asr)
+            )
+        } catch {
+            await gate.release()
+            Log.error("冲刷识别失败：\(error.localizedDescription)")
+            throw error
+        }
+        await gate.release()
+        guard !isDiscarding, !Task.isCancelled else { throw CancellationError() }
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty {
+            appendSegment(TranscriptSegment(
                 start: start, end: end, text: text,
-                language: nil, sequence: 0   // sequence 由 appendSegment 分配
+                language: result.language, sequence: 0
             ))
         }
         buffer = []
         bufferStart = end
         bufferEnd = end
-    }
-
-    /// 会议结束时冲刷缓冲里的剩余音频。
-    private func flushBuffer() async {
-        guard !buffer.isEmpty else { return }
-        interimGeneration += 1
-        if engineSupervisor.states[.asr] == .ready {
-            await gate.acquire()
-            do {
-                let result = try await client.transcribe(buffer, baseURL: engineSupervisor.configuration.baseURL(for: .asr))
-                await gate.release()
-                let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty {
-                    appendSegment(TranscriptSegment(
-                        start: bufferStart, end: bufferEnd, text: text,
-                        language: result.language, sequence: 0
-                    ))
-                }
-            } catch {
-                await gate.release()
-                Log.error("冲刷识别失败：\(error.localizedDescription)")
-            }
-        }
-        buffer = []
+        lastPollAt = 0
         interimText = ""
+        unresolvedSnapshot = nil
+        failedSnapshots = [:]
     }
 
     /// 诊断：UserDefaults `debugCapture` 打开时把采集的原始 PCM 落盘，
     /// 用于区分「麦克风没声」与「识别没触发」。默认关闭，正常路径零开销。
     private var debugFile: FileHandle?
 
-    init(store: MeetingsStore, engineSupervisor: EngineSupervisor = .shared) {
+    init(
+        store: MeetingsStore,
+        engineSupervisor: EngineSupervisor = .shared,
+        capture: any MeetingAudioCapturing = AudioCaptureService(),
+        transcriber: any MeetingTranscribing = EngineClient.shared,
+        chat: any MeetingChatStreaming = EngineClient.shared,
+        readiness: ((EngineWorkerKind) -> Bool)? = nil,
+        now: @escaping () -> Date = Date.init,
+        titleTimeout: TimeInterval = 2
+    ) {
         self.store = store
         self.engineSupervisor = engineSupervisor
+        self.capture = capture
+        self.transcriber = transcriber
+        self.chat = chat
+        self.readiness = readiness
+        self.now = now
+        self.titleTimeout = titleTimeout
         // 每次新建会议必须生成新的 Meeting（新 id）。
         // 曾共用 store.draft 的副本，所有新会议 id 相同，后一个会把前一个
         // 在列表和磁盘上整体覆盖——「新建会议把上一个会议整没了」的元凶。
@@ -198,83 +327,206 @@ final class MeetingSession {
 
     var isLive: Bool { phase == .live }
 
+    private func isReady(_ kind: EngineWorkerKind) -> Bool {
+        readiness?(kind) ?? (engineSupervisor.states[kind] == .ready)
+    }
+
+    private func updateElapsed() {
+        guard let recordingStartedAt else { return }
+        elapsed = meeting.duration + now().timeIntervalSince(recordingStartedAt)
+    }
+
     // MARK: - 控制
 
     func start() {
+        guard !isDiscarding else { return }
         guard phase == .idle || phase == .paused else { return }
-        guard engineSupervisor.states[.asr] == .ready else {
+        guard isReady(.asr) else {
             errorMessage = "语音识别引擎未就绪，请先在设置中启动引擎。"
             return
         }
         errorMessage = nil
         phase = .live
-        meeting.createdAt = Date()
+        if !hasStarted {
+            meeting.createdAt = now()
+            hasStarted = true
+        }
+        recordingStartedAt = now()
+        elapsed = meeting.duration
 
         clockTask = Task { [weak self] in
-            guard let startedAt = self?.meeting.createdAt else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                guard let self else { return }
-                self.elapsed = Date().timeIntervalSince(startedAt) - self.meeting.duration
+                guard let self, self.recordingStartedAt != nil else { return }
+                self.updateElapsed()
             }
         }
 
         pipelineTask = Task { [weak self] in
             guard let self else { return }
             do {
+                try Task.checkCancellation()
                 let stream = try self.capture.start()
+                guard !Task.isCancelled, !self.isDiscarding, self.phase == .live else {
+                    self.capture.stop()
+                    return
+                }
                 if UserDefaults.standard.bool(forKey: "debugCapture") { self.openDebugFile() }
-                let startTime = Date()
                 for await chunk in stream {
                     if Task.isCancelled { break }
-                    let offset = Date().timeIntervalSince(startTime)
+                    let offset = Double(self.recordedSampleCount) / 16_000.0
+                    self.recordedSampleCount += chunk.samples.count
                     self.pushEnergy(chunk.rms)
                     if self.debugFile != nil { self.recordDebug(chunk) }
                     self.appendToBuffer(chunk, offset: offset)
                 }
-                // 冲刷收尾的音频。
-                await self.flushBuffer()
             } catch {
-                await MainActor.run { self.errorMessage = error.localizedDescription; self.phase = .idle }
+                if !Task.isCancelled, !self.isDiscarding {
+                    self.errorMessage = error.localizedDescription
+                    self.phase = .idle
+                }
             }
         }
     }
 
-    func pause() {
-        guard phase == .live else { return }
+    func pause() async {
+        guard phase == .live, !isTransitioning else { return }
+        isTransitioning = true
+        defer { isTransitioning = false }
+        updateElapsed()
         phase = .paused
         meeting.duration = elapsed
-        pipelineTask?.cancel(); pipelineTask = nil
+        recordingStartedAt = nil
+        let pipeline = pipelineTask
+        pipelineTask = nil
+        pipeline?.cancel()
         clockTask?.cancel(); clockTask = nil
         capture.stop()
         closeDebugFile()
+        await pipeline?.value
+        await drainRecognitionTasks()
+        if failedSnapshots.values.contains(where: { $0.generation == interimGeneration }), !buffer.isEmpty {
+            unresolvedSnapshot = makeSnapshot()
+            errorMessage = "部分音频尚未识别，继续时将自动重试。"
+        }
     }
 
-    func resume() {
-        guard phase == .paused else { return }
-        phase = .idle   // start() 只允许 idle/paused，复用前重置
+    func resume() async {
+        guard phase == .paused, !isTransitioning else { return }
+        isTransitioning = true
+        defer { isTransitioning = false }
+        do {
+            try await retryUnresolvedRecognition()
+            try Task.checkCancellation()
+        } catch {
+            if !isDiscarding {
+                errorMessage = "识别重试失败：\(error.localizedDescription)"
+            }
+            return
+        }
+        guard !isDiscarding, phase == .paused else { return }
         start()
     }
 
-    /// 结束会议：停采集，生成纪要。
+    /// 明确放弃未完成的会议；已保存的历史会议不受影响。
+    func discard() async {
+        guard phase != .completed else { return }
+        isDiscarding = true
+        isTransitioning = false
+        phase = .idle
+        finishStage = nil
+        interimGeneration += 1
+        recordingStartedAt = nil
+        pipelineTask?.cancel()
+        clockTask?.cancel()
+        finishTask?.cancel()
+        for task in recognitionTasks.values { task.cancel() }
+        recognitionTasks = [:]
+        pipelineTask = nil
+        clockTask = nil
+        finishTask = nil
+        capture.stop()
+        closeDebugFile()
+        buffer = []
+        unresolvedSnapshot = nil
+        failedSnapshots = [:]
+        interimText = ""
+        composedText = ""
+        errorMessage = nil
+        meeting.segments = []
+        meeting.transcriptText = ""
+        meeting.minutes = nil
+    }
+
+    /// 重复结束调用等待同一事务，不重复识别、生成或保存。
     func finish() async {
-        guard phase == .live || phase == .paused else { return }
-        pause()
+        if let finishTask {
+            await finishTask.value
+            return
+        }
+        guard phase == .live || phase == .paused || phase == .failed, !isTransitioning else { return }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performFinish()
+        }
+        finishTask = task
+        await task.value
+        finishTask = nil
+    }
+
+    private func performFinish() async {
+        guard phase == .live || phase == .paused || phase == .failed else { return }
+        if phase == .live { await pause() }
+        guard !isDiscarding, !Task.isCancelled else { return }
         phase = .composing
+        errorMessage = nil
         meeting.duration = max(elapsed, meeting.duration)
-        await composeMinutes()
-        meeting.transcriptText = meeting.segments.map(\.text).joined(separator: "\n")
-        // 标题优先用 LLM 根据内容起名，失败或未配引擎时用时间戳兜底。
+        do {
+            if !transcriptFinalized {
+                finishStage = .transcribing
+                try await flushBuffer()
+                try Task.checkCancellation()
+                guard !meeting.segments.isEmpty else {
+                    finishStage = nil
+                    phase = .paused
+                    errorMessage = "没有可生成纪要的内容，请继续录制或放弃会议。"
+                    return
+                }
+                meeting.transcriptText = meeting.segments.map(\.text).joined(separator: "\n")
+                transcriptFinalized = true
+            }
+            if meeting.minutes == nil {
+                finishStage = .composing
+                try await composeMinutes()
+            }
+        } catch {
+            if isDiscarding { return }
+            phase = .failed
+            errorMessage = "结束会议失败：\(error.localizedDescription)"
+            return
+        }
+        guard !isDiscarding, !Task.isCancelled else { return }
+        // 标题失败不阻塞已经生成的纪要与保存。
         if meeting.title.isEmpty {
             meeting.title = await generateTitle() ?? Self.defaultTitle(for: meeting)
         }
-        store.save(meeting)
+        guard !isDiscarding, !Task.isCancelled else { return }
+        finishStage = .saving
+        do {
+            try store.save(meeting)
+        } catch {
+            if isDiscarding { return }
+            phase = .failed
+            errorMessage = "保存会议失败：\(error.localizedDescription)"
+            return
+        }
         phase = .completed
+        finishStage = nil
     }
 
     /// 根据纪要摘要（或转写开头）起一个 ≤15 字的会议标题。
     private func generateTitle() async -> String? {
-        guard engineSupervisor.states[.llm] == .ready else { return nil }
+        guard isReady(.llm) else { return nil }
         let basis = !(meeting.minutes?.summary.isEmpty ?? true)
             ? (meeting.minutes?.summary ?? "")
             : String(meeting.transcriptText.prefix(600))
@@ -283,16 +535,30 @@ final class MeetingSession {
             EngineClient.ChatMessage(role: "system", content: "用不超过15个字概括会议主题，只输出标题本身，不要标点、引号或任何解释。"),
             EngineClient.ChatMessage(role: "user", content: basis),
         ]
-        do {
-            let raw = try await collectChat(messages, streamToScreen: false)
-            let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "^[\"'「『]+|[\"'」』。．.]+$", with: "", options: .regularExpression)
-            guard !title.isEmpty, title.count <= 30 else { return nil }
-            return title
-        } catch {
-            Log.info("生成标题失败：\(error.localizedDescription)")
-            return nil
+        let timeout = titleTimeout
+        let raw = await withTaskGroup(of: String?.self) { group in
+            group.addTask { [weak self] in
+                guard let self else { return nil }
+                do {
+                    return try await self.collectChat(messages, streamToScreen: false)
+                } catch {
+                    Log.info("生成标题失败：\(error.localizedDescription)")
+                    return nil
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
+        guard let raw else { return nil }
+        let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "^[\"'「『]+|[\"'」』。．.]+$", with: "", options: .regularExpression)
+        guard !title.isEmpty, title.count <= 30 else { return nil }
+        return title
     }
 
     // MARK: - ASR
@@ -301,31 +567,23 @@ final class MeetingSession {
     /// 把已落定的分段覆盖（对齐 qwenasr-studio 的 segGen 设计）。
     private var interimGeneration = 0
 
-    /// 分段落盘：分配 sequence 并按序归位，保证转写不串行
-    /// （识别任务完成先后不一，乱序到达是常态）。
+    /// 正式片段始终按录制时间轴排序，sequence 与展示顺序一致。
     private func appendSegment(_ segment: TranscriptSegment) {
-        var segment = segment
-        segment.sequence = sequenceCounter
-        sequenceCounter += 1
-        pendingSequences[segment.sequence] = segment
-        drainOrderedSegments()
-    }
-
-    /// 按序落盘。
-    private func drainOrderedSegments() {
-        while let next = pendingSequences[nextExpectedSequence] {
-            pendingSequences.removeValue(forKey: nextExpectedSequence)
-            meeting.segments.append(next)
-            nextExpectedSequence += 1
+        meeting.segments.append(segment)
+        meeting.segments.sort {
+            if $0.start == $1.start { return $0.end < $1.end }
+            return $0.start < $1.start
+        }
+        for index in meeting.segments.indices {
+            meeting.segments[index].sequence = index
         }
     }
 
     // MARK: - 纪要
 
-    private func composeMinutes() async {
-        guard engineSupervisor.states[.llm] == .ready else {
-            composedText = "（语言模型引擎未就绪，仅保留转写原文。）"
-            return
+    private func composeMinutes() async throws {
+        guard isReady(.llm) else {
+            throw MinutesError.engineNotReady(worker: "LLM")
         }
         let segments = meeting.segments.sorted { $0.sequence < $1.sequence }
         // 单次调用的转写预算：留足输出空间，2 小时会议也不会撑爆模型窗口。
@@ -365,6 +623,7 @@ final class MeetingSession {
             meeting.minutes = MinutesComposer.parse(finalText)
         } catch {
             composedText += "\n\n（生成中断：\(error.localizedDescription)）"
+            throw error
         }
     }
 
@@ -372,7 +631,7 @@ final class MeetingSession {
     /// composedText 实时上屏（纪要生成）；起标题这类旁路调用传 false。
     private func collectChat(_ messages: [EngineClient.ChatMessage], streamToScreen: Bool = true) async throws -> String {
         var output = ""
-        for try await token in await client.streamChat(messages: messages, baseURL: engineSupervisor.configuration.baseURL(for: .llm)) {
+        for try await token in await chat.streamChat(messages: messages, baseURL: engineSupervisor.configuration.baseURL(for: .llm), temperature: 0.3) {
             output += token
             if streamToScreen { composedText += token }
         }

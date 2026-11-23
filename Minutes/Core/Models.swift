@@ -9,7 +9,7 @@ struct TranscriptSegment: Identifiable, Codable, Hashable, Sendable {
     var text: String
     /// 识别出的语言代码（如 zh / en），未知则为 nil。
     var language: String?
-    /// 发送给引擎的顺序号，用于乱序响应归位。
+    /// 录制时间轴中的展示顺序号。
     var sequence: Int
 }
 
@@ -25,7 +25,8 @@ enum MeetingPhase: String, Codable, Sendable {
     case idle      // 未开始
     case live      // 录制中转写
     case paused    // 暂停
-    case composing // 生成纪要中
+    case composing // 结束事务进行中
+    case failed    // 结束事务失败，可从检查点重试
     case completed // 已结束
 }
 

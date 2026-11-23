@@ -6,6 +6,7 @@ struct ContentView: View {
     @Environment(EngineSupervisor.self) private var supervisor
     @Environment(\.openSettings) private var openSettings
     @Binding var session: MeetingSession?
+    let appDelegate: AppDelegate
 
     @State private var selection: Meeting.ID?
 
@@ -40,7 +41,7 @@ struct ContentView: View {
                     Label("新会议", systemImage: "record.circle")
                 }
                 .keyboardShortcut("n", modifiers: [.command, .option])
-                .disabled(supervisor.states[.asr] != .ready)
+                .disabled(!canStartNewMeeting)
             }
             ToolbarItem(placement: .automatic) {
                 Button {
@@ -50,6 +51,11 @@ struct ContentView: View {
                 }
                 .keyboardShortcut(",")
             }
+        }
+        .background(WindowLifecycleBridge(appDelegate: appDelegate))
+        .onAppear { appDelegate.session = session }
+        .onChange(of: session.map { ObjectIdentifier($0) }) { _, _ in
+            appDelegate.session = session
         }
     }
 
@@ -97,7 +103,14 @@ struct ContentView: View {
         }
     }
 
+    private var canStartNewMeeting: Bool {
+        guard supervisor.states[.asr] == .ready else { return false }
+        guard let session else { return true }
+        return session.phase == .idle || session.phase == .completed
+    }
+
     private func startNewMeeting() {
+        guard canStartNewMeeting else { return }
         let newSession = MeetingSession(store: store)
         session = newSession
         selection = nil

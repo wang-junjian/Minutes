@@ -40,14 +40,14 @@ XCTest 宿主检测到 XCTest 后不会启动真实模型进程；网络测试�
 
 ## 核心架构与约束
 
-- `MinutesApp` 注入 `MeetingsStore.shared`、`EngineSupervisor.shared` 和可选的 `MeetingSession`。这些 `@Observable` 状态对象承载业务状态，视图不直接管理音频或进程。
+- `MinutesApp` 注入 `MeetingsStore.shared`、`EngineSupervisor.shared` 和可选的 `MeetingSession`。这些 `@Observable` 状态对象承载业务状态，视图不直接管理音频或进程。活跃会议不能直接被新会议替换；正常窗口关闭或应用退出必须让用户返回或明确放弃，不自动结束或恢复草稿。
 - `EngineSupervisor` 分别管理 ASR（`127.0.0.1:8797`）和 LLM（`127.0.0.1:8788`）的 `EngineWorker`。`EngineConfiguration` 持久化用户设置；`MINUTES_ENGINE_ROOT` / `MINUTES_MODELS_ROOT` 只覆盖未显式保存的默认路径。
 - `EngineWorker` 可接管身份匹配的外部服务，但不会终止归属不明的进程。`EngineHealth` 的就绪判断必须继续验证运行时、Metal/构建信息、规范化模型路径和加载状态，不能仅凭 HTTP 200。
 - `EngineClient` 是 actor：ASR 使用 PCM16 WAV multipart `/v1/audio/transcriptions`，LLM 使用 OpenAI 兼容的 `/v1/chat/completions` SSE。`OpenAIStreamParser` 将缺少 `[DONE]`、截断和服务端错误视为失败，防止保存不完整纪要。
 - `AudioCaptureService` 必须以麦克风总线原生格式安装 tap，并为每个缓冲新建 `AVAudioConverter` 转成 16 kHz 单声道 float32；请求非原生 tap 格式曾导致 SIGSEGV，跨缓冲复用 converter 会静默丢数据。
-- `MeetingSession` 不使用 VAD：每 1.5 秒识别当前完整缓冲，句末标点且至少 5 秒时落定，否则 15 秒强制切段，异常时最多保留 60 秒。`TranscriptionGate` 限制并发，`interimGeneration` 丢弃过期中间结果，`sequence` / `nextExpectedSequence` 保证正式片段有序。
+- `MeetingSession` 不使用 VAD：每 1.5 秒识别当前完整缓冲的不可变快照，句末标点且至少 5 秒时落定，否则 15 秒强制切段，异常时最多保留 60 秒。录制时间轴排除暂停（见 ADR-0001）；快照只提交自身音频前缀，`TranscriptionGate` 和在飞任务由会话内部管理，正式片段按录制时间排序。结束事务先 drain 并定稿，再生成和确认保存；失败可从检查点重试，空会议不能完成。标题生成有短预算，超时回退默认标题，不得阻塞保存。
 - `MinutesComposer` 按 12000 字符切块，长会议使用 map-reduce；历史页重新生成复用 `generate`。结构化结果依赖 `## 摘要`、`## 决议`、`## 行动项`、`## 关键词` 四个 Markdown 小节。
-- `MeetingsStore` 在 `~/Library/Application Support/Minutes/Meetings` 按会议 UUID 原子写入一个 JSON 文件。
+- `MeetingsStore` 在 `~/Library/Application Support/Minutes/Meetings` 按会议 UUID 原子写入一个 JSON 文件；`save` 只有落盘成功才更新内存，失败必须可观察，不能让会议误进 `completed`。
 
 ## 原生依赖与模型
 
