@@ -618,6 +618,58 @@ final class MeetingSessionTests: XCTestCase {
         XCTAssertEqual(savedMeeting.transcriptText, "标题不能阻塞保存。")
     }
 
+    func testRecordingPersistsMeetingAudioToDisk() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: TranscriberStub(), readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+
+        let samples = Array(repeating: Float(0.25), count: 8_000)
+        capture.yield(samples: samples, rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+        await session.pause()
+
+        let audioURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).wav")
+        XCTAssertEqual(try Data(contentsOf: audioURL), try WAVEncoder.encode(samples))
+    }
+
+    func testPauseAndResumeKeepMeetingAudioContinuous() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: TranscriberStub(), readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+
+        let beforePause = Array(repeating: Float(0.25), count: 8_000)
+        capture.yield(samples: beforePause, rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+        await session.pause()
+
+        await session.resume()
+        await waitUntil { capture.isRunning }
+        let afterResume = Array(repeating: Float(-0.25), count: 8_000)
+        // 用不同的 rms 作消费信号：energyRing 在暂停后仍保留上一段的值。
+        capture.yield(samples: afterResume, rms: 0.04)
+        await waitUntil { abs((session.energyRing.last ?? 0) - 0.48) < 0.001 }
+        await session.pause()
+
+        let audioURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).wav")
+        XCTAssertEqual(try Data(contentsOf: audioURL), try WAVEncoder.encode(beforePause + afterResume))
+    }
+
     private func makeFailingStore() -> (MeetingsStore, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)

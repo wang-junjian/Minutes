@@ -94,6 +94,36 @@ final class MeetingSession {
     private var recordingStartedAt: Date?
     private var recordedSampleCount = 0
 
+    /// 会议音频：录制期间持续追加落盘，暂停/结束时回填头部（ADR-0002）。
+    private var audioFile: MeetingAudioFile?
+    private var audioURL: URL {
+        store.directory.appendingPathComponent("\(meeting.id.uuidString).wav")
+    }
+
+    private func openAudioFileIfNeeded() {
+        guard audioFile == nil else { return }
+        do {
+            audioFile = try MeetingAudioFile(at: audioURL)
+        } catch {
+            errorMessage = "音频自动保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func recordAudio(_ chunk: CapturedChunk) {
+        guard let audioFile else { return }
+        do {
+            try audioFile.append(chunk.samples)
+        } catch {
+            self.audioFile = nil
+            errorMessage = "音频自动保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func closeAudioFile() {
+        try? audioFile?.finalize()
+        audioFile = nil
+    }
+
     private let gate = TranscriptionGate(limit: 2)
     private var pipelineTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
@@ -338,6 +368,7 @@ final class MeetingSession {
         }
         errorMessage = nil
         phase = .live
+        openAudioFileIfNeeded()
         if !hasStarted {
             meeting.createdAt = now()
             hasStarted = true
@@ -367,6 +398,7 @@ final class MeetingSession {
                     if Task.isCancelled { break }
                     let offset = Double(self.recordedSampleCount) / 16_000.0
                     self.recordedSampleCount += chunk.samples.count
+                    self.recordAudio(chunk)
                     self.pushEnergy(chunk.rms)
                     if self.debugFile != nil { self.recordDebug(chunk) }
                     self.appendToBuffer(chunk, offset: offset)
@@ -394,6 +426,7 @@ final class MeetingSession {
         clockTask?.cancel(); clockTask = nil
         capture.stop()
         closeDebugFile()
+        closeAudioFile()
         await pipeline?.value
         await drainRecognitionTasks()
         if failedSnapshots.values.contains(where: { $0.generation == interimGeneration }), !buffer.isEmpty {
@@ -438,6 +471,7 @@ final class MeetingSession {
         finishTask = nil
         capture.stop()
         closeDebugFile()
+        closeAudioFile()
         buffer = []
         unresolvedSnapshot = nil
         failedSnapshots = [:]

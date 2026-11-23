@@ -9,7 +9,7 @@ final class MeetingsStore {
     private(set) var meetings: [Meeting] = []
     private(set) var errorMessage: String?
 
-    private let directory: URL
+    let directory: URL
 
     convenience init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
