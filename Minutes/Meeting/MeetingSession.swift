@@ -124,6 +124,36 @@ final class MeetingSession {
         audioFile = nil
     }
 
+    // MARK: - 草稿快照（落定即写 + 定时兜底，完成/放弃清理）
+
+    private let drafts: MeetingDraftStore
+    private let draftInterval: TimeInterval
+    private var draftTask: Task<Void, Never>?
+
+    /// 自动保存失败只呈现警告，不阻断录制。
+    private func saveDraft() {
+        let draft = MeetingDraft(
+            meeting: meeting,
+            bufferStartSample: Int((bufferStart * 16_000).rounded())
+        )
+        do {
+            try drafts.save(draft)
+        } catch {
+            errorMessage = "自动保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func startDraftTask() {
+        draftTask?.cancel()
+        draftTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(self?.draftInterval ?? 15) * 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.saveDraft()
+            }
+        }
+    }
+
     private let gate = TranscriptionGate(limit: 2)
     private var pipelineTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
@@ -279,6 +309,7 @@ final class MeetingSession {
         buffer.removeFirst(consumed)
         bufferStart = snapshot.end
         if buffer.isEmpty { bufferEnd = snapshot.end }
+        saveDraft()
     }
 
     /// 会议结束时冲刷缓冲里的剩余音频；失败时保留音频供结束事务重试。
@@ -316,6 +347,7 @@ final class MeetingSession {
         interimText = ""
         unresolvedSnapshot = nil
         failedSnapshots = [:]
+        saveDraft()
     }
 
     /// 诊断：UserDefaults `debugCapture` 打开时把采集的原始 PCM 落盘，
@@ -330,9 +362,11 @@ final class MeetingSession {
         chat: any MeetingChatStreaming = EngineClient.shared,
         readiness: ((EngineWorkerKind) -> Bool)? = nil,
         now: @escaping () -> Date = Date.init,
-        titleTimeout: TimeInterval = 2
+        titleTimeout: TimeInterval = 2,
+        draftInterval: TimeInterval = 15
     ) {
         self.store = store
+        self.drafts = MeetingDraftStore(directory: store.directory)
         self.engineSupervisor = engineSupervisor
         self.capture = capture
         self.transcriber = transcriber
@@ -340,6 +374,7 @@ final class MeetingSession {
         self.readiness = readiness
         self.now = now
         self.titleTimeout = titleTimeout
+        self.draftInterval = draftInterval
         // 每次新建会议必须生成新的 Meeting（新 id）。
         // 曾共用 store.draft 的副本，所有新会议 id 相同，后一个会把前一个
         // 在列表和磁盘上整体覆盖——「新建会议把上一个会议整没了」的元凶。
@@ -369,6 +404,7 @@ final class MeetingSession {
         errorMessage = nil
         phase = .live
         openAudioFileIfNeeded()
+        startDraftTask()
         if !hasStarted {
             meeting.createdAt = now()
             hasStarted = true
@@ -427,6 +463,8 @@ final class MeetingSession {
         capture.stop()
         closeDebugFile()
         closeAudioFile()
+        draftTask?.cancel(); draftTask = nil
+        saveDraft()
         await pipeline?.value
         await drainRecognitionTasks()
         if failedSnapshots.values.contains(where: { $0.generation == interimGeneration }), !buffer.isEmpty {
@@ -472,6 +510,9 @@ final class MeetingSession {
         capture.stop()
         closeDebugFile()
         closeAudioFile()
+        draftTask?.cancel(); draftTask = nil
+        drafts.delete(id: meeting.id)
+        try? FileManager.default.removeItem(at: audioURL)
         buffer = []
         unresolvedSnapshot = nil
         failedSnapshots = [:]
@@ -546,6 +587,7 @@ final class MeetingSession {
         }
         phase = .completed
         finishStage = nil
+        drafts.delete(id: meeting.id)
     }
 
     /// 根据纪要摘要（或转写开头）起一个 ≤15 字的会议标题。

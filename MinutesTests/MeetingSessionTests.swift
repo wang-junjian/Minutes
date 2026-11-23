@@ -670,6 +670,146 @@ final class MeetingSessionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: audioURL), try WAVEncoder.encode(beforePause + afterResume))
     }
 
+    func testClosingSegmentWritesDraftSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let transcriber = TranscriberStub()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: transcriber, readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+
+        let chunk = Array(repeating: Float(0.1), count: 24_000) // 1.5 秒
+        for index in 0..<4 {
+            capture.yield(samples: chunk)
+            await waitUntil { await transcriber.requestCount() == index + 1 }
+            if index < 3 {
+                await transcriber.resolveRequest(at: index, text: "仍在说")
+                await waitUntil { session.interimText == "仍在说" }
+            }
+        }
+        await transcriber.resolveRequest(at: 3, text: "第一段。")
+        await waitUntil { session.meeting.segments.count == 1 }
+
+        let draft = try XCTUnwrap(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        XCTAssertEqual(draft.meeting.segments.map(\.text), ["第一段。"])
+        XCTAssertEqual(draft.bufferStartSample, 96_000) // 已落定 6 秒音频
+        await session.pause()
+    }
+
+    func testPeriodicDraftSnapshotWithoutClosedSegment() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: TranscriberStub(), readiness: { _ in true }, now: { clock.now },
+            draftInterval: 0.05
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+        capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+
+        // 持续讲话无落定：兜底快照也要持久化会议与已落定位置。
+        await waitUntil { MeetingDraftStore(directory: directory).load(id: session.meeting.id) != nil }
+        let draft = try XCTUnwrap(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        XCTAssertEqual(draft.bufferStartSample, 0)
+        XCTAssertTrue(draft.meeting.segments.isEmpty)
+        await session.pause()
+    }
+
+    func testFinishDeletesDraftAndKeepsAudio() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingsStore(directory: directory)
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let transcriber = TranscriberStub()
+        let session = MeetingSession(
+            store: store, capture: capture, transcriber: transcriber, chat: ChatStub(),
+            readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+        capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+
+        let finishing = Task { await session.finish() }
+        await waitUntil { await transcriber.requestCount() == 1 }
+        await transcriber.resolveRequest(at: 0, text: "最后一句。")
+        await finishing.value
+
+        XCTAssertEqual(session.phase, .completed)
+        XCTAssertNil(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        let audioURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory
+            .appendingPathComponent("\(session.meeting.id.uuidString).draft").path))
+    }
+
+    func testDiscardDeletesDraftAndAudio() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: TranscriberStub(), readiness: { _ in true }, now: { clock.now }
+        )
+        session.start()
+        await waitUntil { capture.isRunning }
+        capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+        await session.pause()
+
+        let audioURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).wav")
+        XCTAssertNotNil(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
+
+        await session.discard()
+
+        XCTAssertNil(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path))
+    }
+
+    func testDraftSaveFailureIsVisibleAndDoesNotBlockRecording() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: TranscriberStub(), readiness: { _ in true }, now: { clock.now },
+            draftInterval: 0.05
+        )
+        // 故障注入：草稿路径被同名目录占据，原子写必然失败。
+        let draftURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).draft")
+        try FileManager.default.createDirectory(at: draftURL, withIntermediateDirectories: true)
+
+        session.start()
+        await waitUntil { capture.isRunning }
+        capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.5)
+        await waitUntil { session.energyRing.last == 1 }
+        await waitUntil { session.errorMessage?.contains("自动保存失败") == true }
+
+        // 录制不被阻断：后续音频照常消费，会话仍在录制中。
+        capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.04)
+        await waitUntil { abs((session.energyRing.last ?? 0) - 0.48) < 0.001 }
+        XCTAssertEqual(session.phase, .live)
+        await session.pause()
+    }
+
     private func makeFailingStore() -> (MeetingsStore, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
