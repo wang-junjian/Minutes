@@ -8,14 +8,23 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AA00000000000000000000A1 /* Minutes */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Minutes; sourceTree = "<group>"; };
+		AA00000000000000000000A2 /* MinutesTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = MinutesTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFileReference section */
 		AA00000000000000000000B1 /* Minutes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Minutes.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000000B2 /* MinutesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MinutesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA00000000000000000000C1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000000000000000000C2 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -29,6 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				AA00000000000000000000A1 /* Minutes */,
+				AA00000000000000000000A2 /* MinutesTests */,
 				AA00000000000000000000D2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -37,6 +47,7 @@
 			isa = PBXGroup;
 			children = (
 				AA00000000000000000000B1 /* Minutes.app */,
+				AA00000000000000000000B2 /* MinutesTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -65,7 +76,36 @@
 			productReference = AA00000000000000000000B1 /* Minutes.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AA00000000000000000000T1 /* MinutesTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000000T2 /* Build configuration list for PBXNativeTarget "MinutesTests" */;
+			buildPhases = (
+				AA00000000000000000000E4 /* Sources */,
+				AA00000000000000000000C2 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA00000000000000000000TD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000000A2 /* MinutesTests */,
+			);
+			name = MinutesTests;
+			packageProductDependencies = (
+			);
+			productName = MinutesTests;
+			productReference = AA00000000000000000000B2 /* MinutesTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXTargetDependency section */
+		AA00000000000000000000TD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA00000000000000000000E1 /* Minutes */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		AA00000000000000000000F1 /* Project object */ = {
@@ -77,6 +117,10 @@
 				TargetAttributes = {
 					AA00000000000000000000E1 = {
 						CreatedOnToolsVersion = 16.3;
+					};
+					AA00000000000000000000T1 = {
+						CreatedOnToolsVersion = 16.3;
+						TestTargetName = Minutes;
 					};
 				};
 			};
@@ -97,12 +141,20 @@
 			projectRoot = "";
 			targets = (
 				AA00000000000000000000E1 /* Minutes */,
+				AA00000000000000000000T1 /* MinutesTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AA00000000000000000000E3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000000000000000000E4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -300,6 +352,38 @@
 			};
 			name = Release;
 		};
+		AA00000000000000000000T3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wang.junjian.minutes.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Minutes.app/Contents/MacOS/Minutes";
+			};
+			name = Debug;
+		};
+		AA00000000000000000000T4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wang.junjian.minutes.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Minutes.app/Contents/MacOS/Minutes";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -317,6 +401,15 @@
 			buildConfigurations = (
 				AA0000000000000000000103 /* Debug */,
 				AA0000000000000000000104 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA00000000000000000000T2 /* Build configuration list for PBXNativeTarget "MinutesTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000000T3 /* Debug */,
+				AA00000000000000000000T4 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

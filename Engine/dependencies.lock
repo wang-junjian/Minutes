@@ -1,0 +1,19 @@
+# Minutes 原生依赖与模型锁定文件（供 Shell 脚本 source）。
+AUDIOCPP_REPOSITORY="https://github.com/0xShug0/audio.cpp.git"
+AUDIOCPP_COMMIT="6f71a3b87105b974d781bf78fda6c0c5f7d248d5"
+LLAMACPP_REPOSITORY="https://github.com/ggml-org/llama.cpp.git"
+LLAMACPP_COMMIT="513ad7ae0770cdd7e21637605ade80225a772ac0"
+
+ASR_MODEL_REPOSITORY="audio-cpp/audio.cpp-gguf"
+ASR_MODEL_REVISION="7a103b33f04120535bdfe97b5f65b79d3c90d708"
+ASR_MODEL_FILE="Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"
+ASR_MODEL_SHA256="3bc2462eca3a3a8f56abcd860d0943ffdc0546547dde55a9d08589607d6f3936"
+ASR_MODEL_DOWNLOAD_URL="https://modelscope.cn/models/HereIsMark/audio.cpp-gguf/resolve/master/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"
+ASR_MODEL_BYTES="2473017600"
+
+LLM_MODEL_REPOSITORY="unsloth/Qwen3.5-4B-GGUF"
+LLM_MODEL_REVISION="e87f176479d0855a907a41277aca2f8ee7a09523"
+LLM_MODEL_FILE="Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf"
+LLM_MODEL_SHA256="00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+LLM_MODEL_DOWNLOAD_URL="https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/Qwen3.5-4B-Q4_K_M.gguf"
+LLM_MODEL_BYTES="2740937888"

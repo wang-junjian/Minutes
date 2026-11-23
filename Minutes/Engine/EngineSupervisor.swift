@@ -1,6 +1,6 @@
 import Foundation
 
-/// 管理三个推理工作进程。UI 只跟它打交道。
+/// 管理两个原生推理工作进程。UI 只跟它打交道。
 @Observable
 @MainActor
 final class EngineSupervisor {

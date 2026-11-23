@@ -1,6 +1,0 @@
-# TTS worker：VoxCPM2-8bit（MLX，mlx-audio）
-# 铁律：运行时绝不 import transformers（启动 0.7s → 60s+）。
-mlx-audio>=0.6.4
-fastapi>=0.110
-uvicorn>=0.29
-numpy>=2.0

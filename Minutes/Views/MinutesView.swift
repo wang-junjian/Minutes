@@ -122,11 +122,16 @@ struct MinutesView: View {
 
     private var transcriptSection: some View {
         section(title: "转写原文", systemImage: "waveform") {
-            Text(meeting.transcriptText.isEmpty
-                 ? meeting.segments.map(\.text).joined(separator: "\n")
-                 : meeting.transcriptText)
-                .font(.body)
-                .textSelection(.enabled)
+            // 单个超长 Text 会在选中会议时同步排版全文，快速切换会阻塞主线程。
+            // 按原有换行拆成懒加载行，只排版可见内容，同时保留逐行选择。
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(transcript.components(separatedBy: .newlines).enumerated()), id: \.offset) { _, line in
+                    Text(line.isEmpty ? " " : line)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
     }
 
