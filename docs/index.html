@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>纪要（Minutes）· macOS 本地会议纪要｜开完会，纪要已经写好了</title>
+<meta name="description" content="纪要是一个只在本机运行的 macOS 会议纪应用：本地 Qwen3-ASR 转写，本地 4B 模型压成摘要、决议、行动项与关键词。音频与文本全程不出本机。">
+<meta property="og:title" content="纪要（Minutes）· macOS 本地会议纪要">
+<meta property="og:description" content="两个 Metal 推理进程，一个 SwiftUI 应用，全程不出网。">
+<link rel="icon" href="appicon.png">
+<style>
+  :root{
+    --bg:#F7F6F3;
+    --surface:#FFFFFF;
+    --ink:#16161A;
+    --ink2:#4A4A54;
+    --ink3:#7C7C88;
+    --line:#E4E3DD;
+    --line2:#EEEDE8;
+    --indigo:#3A3D8F;
+    --indigo-d:#2C2E6F;
+    --indigo-soft:#EEEEF8;
+    --indigo-line:#C6C7E4;
+    --blue:#2F6FB0;
+    --teal:#0F766E;
+    --violet:#6A4FB0;
+    --warn:#B45309;
+    --warn-soft:#FBF1E1;
+    --warn-line:#EBCFA6;
+    --code:#F3F2ED;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Helvetica Neue",sans-serif;
+    font-size:16px;line-height:1.78;
+    -webkit-font-smoothing:antialiased;
+    letter-spacing:.005em;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+  .layout{display:grid;grid-template-columns:196px minmax(0,1fr);gap:72px;align-items:start}
+  .col{min-width:0;max-width:820px}
+
+  /* ---------- hero ---------- */
+  .hero{padding:84px 0 0}
+  .hero-top{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);gap:52px;align-items:center}
+  .hero-copy,.hero-art{min-width:0}
+  .hero-art svg{
+    display:block;width:100%;max-width:552px;height:auto;margin-left:auto;
+    filter:drop-shadow(0 12px 22px rgba(20,20,40,.13));
+  }
+  .mark{display:flex;align-items:center;gap:11px;margin-bottom:26px}
+  .mark img{width:30px;height:30px;border-radius:7px;display:block}
+  .mark .name{font-size:14px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2)}
+  .kicker{margin:0 0 16px;font-size:13px;font-weight:600;letter-spacing:.08em;color:var(--indigo)}
+  .get{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:30px 0 0}
+  .get a{
+    display:inline-block;padding:10px 20px;border-radius:8px;
+    background:var(--indigo);color:#FFFFFF;text-decoration:none;
+    font-size:14px;font-weight:600;
+  }
+  .get a:hover{background:var(--indigo-d)}
+  .get .hint{font-size:13px;color:var(--ink3)}
+  h1{
+    margin:0;font-size:clamp(36px,4.3vw,54px);line-height:1.16;
+    font-weight:640;letter-spacing:-.022em;
+  }
+  h1 .accent{color:var(--indigo)}
+  .lede{
+    margin:24px 0 0;font-size:18.5px;line-height:1.74;color:var(--ink2);
+    max-width:660px;font-weight:380;
+  }
+  .meta{
+    display:flex;flex-wrap:wrap;gap:0;margin:42px 0 0;
+    border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  }
+  .meta div{flex:1 1 auto;min-width:126px;padding:15px 20px 15px 0}
+  .meta dt{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);margin-bottom:5px}
+  .meta dd{margin:0;font-size:14px;color:var(--ink);font-weight:480}
+  .meta a{color:var(--indigo);text-decoration:none;border-bottom:1px solid var(--indigo-line)}
+  .meta a:hover{border-color:var(--indigo)}
+
+  /* ---------- toc ---------- */
+  nav.toc{position:sticky;top:56px;padding-top:96px}
+  nav.toc .h{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);margin-bottom:16px}
+  nav.toc a{
+    display:block;padding:5px 0 5px 12px;font-size:13px;color:var(--ink2);
+    text-decoration:none;border-left:1.5px solid var(--line2);line-height:1.5;
+  }
+  nav.toc a:hover{color:var(--indigo);border-left-color:var(--indigo)}
+  nav.toc a span{display:inline-block;width:22px;color:var(--ink3);font-variant-numeric:tabular-nums;font-size:11px}
+
+  /* ---------- sections ---------- */
+  main{padding:92px 0 0}
+  section{margin:0 0 92px;scroll-margin-top:40px}
+  .num{
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--indigo);
+    display:block;margin-bottom:14px;
+  }
+  h2{margin:0 0 22px;font-size:29px;line-height:1.32;font-weight:620;letter-spacing:-.015em}
+  h3{margin:44px 0 14px;font-size:18.5px;font-weight:600;letter-spacing:-.005em}
+  h4{margin:30px 0 10px;font-size:15px;font-weight:600;color:var(--ink2)}
+  p{margin:0 0 18px}
+  strong{font-weight:600}
+  em{font-style:normal;background:linear-gradient(180deg,transparent 62%,var(--indigo-soft) 62%);padding:0 2px}
+  a{color:var(--indigo)}
+
+  code{
+    font-family:var(--mono);font-size:.875em;
+    background:var(--code);padding:2px 6px;border-radius:4px;
+    border:1px solid var(--line2);white-space:nowrap;
+  }
+  pre{
+    margin:22px 0;padding:20px 22px;background:var(--surface);
+    border:1px solid var(--line);border-radius:10px;overflow-x:auto;
+    font-size:13px;line-height:1.85;
+  }
+  pre code{background:none;border:none;padding:0;white-space:pre;font-size:13px}
+  .cmt{color:var(--ink3)}
+  .kw{color:var(--indigo);font-weight:500}
+  .str{color:#0F766E}
+  .src{
+    display:inline-block;font-family:var(--mono);font-size:11px;color:var(--ink3);
+    background:var(--code);border-radius:3px;padding:1px 5px;vertical-align:1px;
+  }
+
+  /* ---------- callout ---------- */
+  .note{
+    margin:28px 0;padding:20px 24px;background:var(--surface);
+    border:1px solid var(--line);border-left:2.5px solid var(--indigo);
+    border-radius:0 8px 8px 0;
+  }
+  .note .t{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--indigo);margin-bottom:8px;font-weight:600}
+  .note p{margin:0;font-size:15px;color:var(--ink2)}
+  .note p + p{margin-top:10px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.warn .t{color:var(--warn)}
+
+  /* ---------- cards ---------- */
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:28px 0}
+  .trio{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:28px 0}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:24px;min-width:0;
+  }
+  .card .tag{
+    display:inline-block;font-size:11px;font-weight:600;letter-spacing:.06em;
+    color:var(--ink3);margin-bottom:10px;
+  }
+  .card h4{margin:0 0 10px;font-size:16.5px;color:var(--ink);font-weight:600}
+  .card p{margin:0;font-size:14.5px;line-height:1.7;color:var(--ink2)}
+  .card.warn{border-color:var(--warn-line);background:linear-gradient(180deg,#FFFCF7,#FFFFFF)}
+  .card.warn .tag{color:var(--warn)}
+  .card .k{font-size:30px;font-weight:600;color:var(--ink);letter-spacing:-.02em;line-height:1.1;display:block;margin-bottom:6px}
+
+  /* ---------- figure ---------- */
+  figure{margin:36px 0}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{
+    margin-top:14px;font-size:13px;color:var(--ink3);line-height:1.65;
+    padding-left:14px;border-left:2px solid var(--line);
+  }
+  figcaption b{color:var(--ink2);font-weight:600}
+
+  /* ---------- table ---------- */
+  .tbl{width:100%;border-collapse:collapse;margin:26px 0;font-size:14px}
+  .tbl th{
+    text-align:left;font-weight:600;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink3);padding:0 16px 10px 0;border-bottom:1px solid var(--line);
+  }
+  .tbl td{padding:14px 16px 14px 0;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.65}
+  .tbl td:last-child,.tbl th:last-child{padding-right:0}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl .m{font-family:var(--mono);font-size:12.5px}
+  .tbl code{white-space:normal}
+  .yes{color:var(--indigo);font-weight:600}
+  .no{color:var(--ink3)}
+  .tbl-wrap{overflow-x:auto}
+
+  /* ---------- flow list ---------- */
+  ol.steps{list-style:none;padding:0;margin:24px 0;counter-reset:s}
+  ol.steps li{
+    counter-increment:s;position:relative;padding:0 0 22px 42px;
+    font-size:15px;color:var(--ink2);
+  }
+  ol.steps li::before{
+    content:counter(s);position:absolute;left:0;top:2px;
+    width:24px;height:24px;border-radius:50%;background:var(--surface);
+    border:1px solid var(--line);color:var(--ink3);
+    font-family:var(--mono);font-size:11px;display:flex;align-items:center;justify-content:center;
+  }
+  ol.steps li::after{
+    content:'';position:absolute;left:12px;top:28px;bottom:0;width:1px;background:var(--line2);
+  }
+  ol.steps li:last-child::after{display:none}
+  ol.steps li strong{color:var(--ink);display:block;margin-bottom:3px;font-weight:600}
+
+  ul.plain{margin:18px 0;padding-left:0;list-style:none}
+  ul.plain li{position:relative;padding-left:20px;margin-bottom:12px;font-size:15px;color:var(--ink2)}
+  ul.plain li::before{content:'';position:absolute;left:2px;top:.72em;width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+
+  .more{
+    display:block;margin:34px 0 0;padding:22px 24px;background:var(--surface);
+    border:1px solid var(--line);border-radius:12px;text-decoration:none;color:var(--ink);
+  }
+  .more:hover{border-color:var(--indigo-line)}
+  .more .t{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--indigo);font-weight:600}
+  .more .h{display:block;margin:8px 0 6px;font-size:17px;font-weight:600}
+  .more .d{display:block;font-size:14px;color:var(--ink2);line-height:1.65}
+
+  footer{
+    margin-top:110px;padding:40px 0 80px;border-top:1px solid var(--line);
+    font-size:13px;color:var(--ink3);
+  }
+  footer .r{display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
+  footer a{color:var(--indigo);text-decoration:none;border-bottom:1px solid var(--indigo-line)}
+
+  @media (max-width:900px){
+    .wrap{padding:0 22px}
+    .layout{grid-template-columns:1fr;gap:0}
+    nav.toc{display:none}
+    .hero{padding-top:54px}
+    .hero-top{grid-template-columns:1fr;gap:34px}
+    .hero-art svg{margin:0 auto;max-width:480px}
+    main{padding-top:64px}
+    .duo,.trio{grid-template-columns:1fr}
+    section{margin-bottom:68px}
+    .meta div{flex:1 1 45%}
+    h2{font-size:25px}
+    code{white-space:normal;overflow-wrap:anywhere}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="hero-top">
+      <div class="hero-copy">
+        <div class="mark">
+          <img src="appicon.png" alt="">
+          <span class="name">Minutes · 纪要</span>
+        </div>
+
+        <p class="kicker">macOS 本地会议纪要</p>
+
+        <h1>开完会，<br><span class="accent">纪要已经写好了</span></h1>
+
+        <p class="lede">
+          麦克风音频进 16 kHz 单声道，交给本地的 Qwen3-ASR 转写；讲完一句，本地的 4B 模型把它压成摘要、决议、行动项和关键词。
+          整个过程只有两次回环 HTTP，<strong>没有一个字节离开这台 Mac</strong>。
+        </p>
+
+        <p class="get">
+          <a href="https://github.com/wang-junjian/Minutes">查看源码 →</a>
+          <span class="hint">macOS 14+ · Apple Silicon · 需自备 4.86 GiB 权重</span>
+        </p>
+      </div>
+
+      <div class="hero-art">
+        <svg viewBox="0 0 720 470" role="img" aria-label="纪要主窗口：左侧会议列表，中间实时转写，底部波形与结束按钮">
+          <defs>
+            <clipPath id="win"><rect x="10" y="10" width="700" height="450" rx="12"/></clipPath>
+          </defs>
+
+          <rect x="10" y="10" width="700" height="450" rx="12" fill="#FFFFFF"/>
+
+          <g clip-path="url(#win)">
+            <!-- 标题栏 -->
+            <path d="M10,22 A12,12 0 0 1 22,10 H698 A12,12 0 0 1 710,22 V46 H10 Z" fill="#F1F0EC"/>
+            <circle cx="32" cy="28" r="6.5" fill="#EC6A5E"/>
+            <circle cx="52" cy="28" r="6.5" fill="#F5BF4F"/>
+            <circle cx="72" cy="28" r="6.5" fill="#61C554"/>
+
+            <!-- 侧栏 -->
+            <rect x="10" y="46" width="196" height="414" fill="#F5F4F0"/>
+            <line x1="206" y1="46" x2="206" y2="460" stroke="#E4E3DD" stroke-width="1"/>
+            <text x="30" y="76" font-size="11" letter-spacing="1.6" fill="#8C8C96" font-family="-apple-system,PingFang SC">会议</text>
+
+            <rect x="18" y="86" width="180" height="46" rx="7" fill="#E7E6E1"/>
+            <text x="30" y="106" font-size="13.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">产品周会 · 纪要字段</text>
+            <text x="30" y="123" font-size="11" fill="#7C7C88" font-family="-apple-system,PingFang SC">5月14日 10:30 · 32:15</text>
+
+            <text x="30" y="157" font-size="13.5" fill="#3A3A44" font-family="-apple-system,PingFang SC">客户访谈 · 虚拟电厂</text>
+            <text x="30" y="174" font-size="11" fill="#8C8C96" font-family="-apple-system,PingFang SC">5月13日 15:00 · 48:02</text>
+
+            <text x="30" y="208" font-size="13.5" fill="#3A3A44" font-family="-apple-system,PingFang SC">复盘：原生迁移</text>
+            <text x="30" y="225" font-size="11" fill="#8C8C96" font-family="-apple-system,PingFang SC">5月12日 09:20 · 21:40</text>
+
+            <text x="30" y="259" font-size="13.5" fill="#3A3A44" font-family="-apple-system,PingFang SC">周一对齐</text>
+            <text x="30" y="276" font-size="11" fill="#8C8C96" font-family="-apple-system,PingFang SC">5月11日 09:00 · 12:04</text>
+
+            <!-- 主区域：状态条 -->
+            <rect x="206" y="46" width="504" height="54" fill="#FAF9F6"/>
+            <line x1="206" y1="100" x2="710" y2="100" stroke="#E9E8E3" stroke-width="1"/>
+            <circle cx="230" cy="73" r="5" fill="#E0483A"/>
+            <text x="244" y="70" font-size="14.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">正在聆听</text>
+            <text x="244" y="88" font-size="11" fill="#7C7C88" font-family="-apple-system,PingFang SC">每 1.5 秒刷新一次转写</text>
+            <text x="690" y="81" text-anchor="end" font-size="19" fill="#4A4A54" font-family="ui-monospace,Menlo">12:48</text>
+
+            <!-- 转写 -->
+            <text x="226" y="132" font-size="10.5" fill="#9A9AA4" font-family="ui-monospace,Menlo">00:12</text>
+            <text x="268" y="132" font-size="13" fill="#33333C" font-family="-apple-system,PingFang SC">先对齐一下这周的排期。</text>
+
+            <text x="226" y="162" font-size="10.5" fill="#9A9AA4" font-family="ui-monospace,Menlo">00:18</text>
+            <text x="268" y="162" font-size="13" fill="#33333C" font-family="-apple-system,PingFang SC">纪要拆成摘要、决议、行动项、关键词四段。</text>
+
+            <text x="226" y="192" font-size="10.5" fill="#9A9AA4" font-family="ui-monospace,Menlo">00:26</text>
+            <text x="268" y="192" font-size="13" fill="#33333C" font-family="-apple-system,PingFang SC">行动项要写清负责人，不写就等于没定。</text>
+
+            <text x="226" y="222" font-size="10.5" fill="#9A9AA4" font-family="ui-monospace,Menlo">00:33</text>
+            <text x="268" y="222" font-size="13" fill="#33333C" font-family="-apple-system,PingFang SC">客户那边的园区场景主要是虚拟电厂。</text>
+
+            <text x="226" y="258" font-size="10.5" fill="#B0B0BA" font-family="ui-monospace,Menlo">00:41</text>
+            <text x="268" y="258" font-size="13" fill="#A8A8B2" font-family="-apple-system,PingFang SC">我这边先把负荷聚合的接口</text>
+            <rect x="560" y="246" width="2" height="15" fill="#3A3D8F" opacity="0.5"/>
+
+            <text x="226" y="302" font-size="11" fill="#B0B0BA" font-family="-apple-system,PingFang SC">灰色是还没定稿的中间结果，落定后才进正式分段</text>
+
+            <text x="458" y="352" text-anchor="middle" font-size="11.5" fill="#C2C2CA" font-family="-apple-system,PingFang SC">结束后，这个位置会换成摘要、决议、行动项与关键词</text>
+
+            <!-- 底部控制条 -->
+            <line x1="206" y1="386" x2="710" y2="386" stroke="#E9E8E3" stroke-width="1"/>
+            <rect x="206" y="386" width="504" height="74" fill="#FAF9F6"/>
+
+            <g fill="#3C7FD0">
+              <rect x="226" y="417" width="5" height="8" rx="2.5"/>
+              <rect x="236" y="414" width="5" height="14" rx="2.5"/>
+              <rect x="246" y="410" width="5" height="22" rx="2.5"/>
+              <rect x="256" y="404" width="5" height="34" rx="2.5"/>
+              <rect x="266" y="412" width="5" height="18" rx="2.5"/>
+              <rect x="276" y="408" width="5" height="26" rx="2.5"/>
+              <rect x="286" y="416" width="5" height="10" rx="2.5"/>
+              <rect x="296" y="411" width="5" height="20" rx="2.5"/>
+              <rect x="306" y="402" width="5" height="38" rx="2.5"/>
+              <rect x="316" y="408" width="5" height="26" rx="2.5"/>
+              <rect x="326" y="414" width="5" height="14" rx="2.5"/>
+              <rect x="336" y="418" width="5" height="6" rx="2.5"/>
+              <rect x="346" y="412" width="5" height="18" rx="2.5"/>
+              <rect x="356" y="406" width="5" height="30" rx="2.5"/>
+              <rect x="366" y="403" width="5" height="36" rx="2.5"/>
+              <rect x="376" y="410" width="5" height="22" rx="2.5"/>
+              <rect x="386" y="415" width="5" height="12" rx="2.5"/>
+              <rect x="396" y="412" width="5" height="18" rx="2.5"/>
+              <rect x="406" y="407" width="5" height="28" rx="2.5"/>
+              <rect x="416" y="413" width="5" height="16" rx="2.5"/>
+            </g>
+            <g fill="#6A4FB0">
+              <rect x="426" y="417" width="5" height="8" rx="2.5"/>
+              <rect x="436" y="414" width="5" height="14" rx="2.5"/>
+              <rect x="446" y="411" width="5" height="20" rx="2.5"/>
+            </g>
+
+            <rect x="486" y="401" width="70" height="32" rx="8" fill="#FFFFFF" stroke="#DCDBD5"/>
+            <text x="521" y="422" text-anchor="middle" font-size="12.5" fill="#33333C" font-family="-apple-system,PingFang SC">暂停</text>
+
+            <rect x="566" y="401" width="132" height="32" rx="8" fill="#FBEEEC" stroke="#E9C3BE"/>
+            <text x="632" y="422" text-anchor="middle" font-size="12.5" fill="#B3261E" font-family="-apple-system,PingFang SC">结束并生成纪要</text>
+          </g>
+
+          <rect x="10" y="10" width="700" height="450" rx="12" fill="none" stroke="#DCDBD5"/>
+        </svg>
+      </div>
+    </div>
+
+    <dl class="meta">
+      <div><dt>版本</dt><dd>0.1.0</dd></div>
+      <div><dt>平台</dt><dd>macOS 14+ · arm64</dd></div>
+      <div><dt>应用</dt><dd>Swift 6 · SwiftUI</dd></div>
+      <div><dt>推理</dt><dd>audio.cpp + llama.cpp（Metal）</dd></div>
+      <div><dt>权重</dt><dd>4.86 GiB</dd></div>
+      <div><dt>仓库</dt><dd><a href="https://github.com/wang-junjian/Minutes">wang-junjian/Minutes</a></dd></div>
+    </dl>
+  </header>
+
+  <div class="layout">
+    <nav class="toc">
+      <div class="h">目录</div>
+      <a href="#s1"><span>01</span>为什么在本地</a>
+      <a href="#s2"><span>02</span>形态</a>
+      <a href="#s3"><span>03</span>三个进程</a>
+      <a href="#s4"><span>04</span>音频的旅程</a>
+      <a href="#s5"><span>05</span>三个计数器</a>
+      <a href="#s6"><span>06</span>「就绪」是身份</a>
+      <a href="#s7"><span>07</span>供应链</a>
+      <a href="#s8"><span>08</span>原生快了多少</a>
+      <a href="#s9"><span>09</span>边界</a>
+      <a href="#s10"><span>10</span>开始用</a>
+    </nav>
+
+    <div class="col">
+    <main>
+
+    <!-- ============ 01 ============ -->
+    <section id="s1">
+      <span class="num">01 —— 定位</span>
+      <h2>会议内容，是最不该上传的那一类文本</h2>
+
+      <p>
+        云端转写服务解决的是「我不想在本机装模型」。但会议音频里通常同时装着：未公开的排期、客户名单、报价口径、还没宣布的人事决定。
+        把它上传，换来的是省掉一次 4.86 GiB 的下载。
+      </p>
+
+      <p>
+        纪要的做法是把模型搬过来。两个 GGUF 常驻在 <code>~/Library/Application Support/Minutes/models</code>，
+        语音识别和纪要生成各跑一个独立进程，只绑定 <code>127.0.0.1</code>。
+        <em>音频从麦克风到文字，中间只经过两次本机回环请求。</em>
+      </p>
+
+      <div class="trio">
+        <div class="card">
+          <span class="tag">网络</span>
+          <h4>运行期不出网</h4>
+          <p>两个引擎只监听回环地址，应用没有遥测、没有账户校验、没有云 API。除了首次下载权重，跑起来之后不需要任何网络。</p>
+        </div>
+        <div class="card">
+          <span class="tag">成本</span>
+          <h4>没有 key，也没有订阅</h4>
+          <p>不需要注册、不需要额度。代价换了个地方支付：磁盘 4.86 GiB，内存约 4.3 GB footprint，以及首次编译引擎的十几分钟。</p>
+        </div>
+        <div class="card">
+          <span class="tag">可用性</span>
+          <h4>断网也能开会</h4>
+          <p>飞机上、客户内网里、酒店弱网下都一样。识别和纪要生成都在本机 GPU 上跑，不强依赖任何外部服务活着。</p>
+        </div>
+      </div>
+
+      <div class="note warn">
+        <div class="t">代价写在前面</div>
+        <p>
+          这不是一个「轻量」应用。首次要下 4.86 GiB 权重并逐个校验 SHA256，两个模型同时常驻约 4.3 GB，
+          而且只在 Apple Silicon 上有意义（arm64 + Metal）。如果你的会议内容不敏感、也不想占这些资源，
+          用云端服务是更省事的选择——<strong>这个项目的价值不在于「本地」这个词，而在于把边界画清楚了</strong>。
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ 02 ============ -->
+    <section id="s2">
+      <span class="num">02 —— 形态</span>
+      <h2>一个窗口，三件事：录、看、读</h2>
+
+      <p>
+        左边是会议列表，中间是正在进行的实时转写，结束后同一个位置换成纪要。
+        没有欢迎页、没有引导流程、没有设置向导——打开就是一场会议，或者一份旧纪要。
+      </p>
+
+      <p>
+        几个界面决定值得单独说，因为它们都不是「设计偏好」，而是从具体的坑里长出来的：
+      </p>
+
+      <ul class="plain">
+        <li>
+          <strong>空状态给一个主按钮，而不是让人去工具栏找。</strong>
+          这里没直接用 <code>ContentUnavailableView</code> 的 actions 形式，因为它在 macOS 14 上有已知的按钮分发崩溃；
+          手写一个 <code>VStack</code> 加 <code>borderedProminent</code> 按钮就够了。
+        </li>
+        <li>
+          <strong>中间结果用灰字，落定才落墨。</strong>
+          每 1.5 秒刷新一次的文本单独存在 <code>interimText</code> 里，不塞进分段数组。
+          用户看到的是「这句话还在变」，而不是「这段话被反复改写」。
+        </li>
+        <li>
+          <strong>侧栏的删除按钮常驻占位，只切透明度。</strong>
+          显隐切换会让整行宽度变化、列表跟着跳。按钮一直占 18pt，hover 时才显形，光标移动时列表纹丝不动。
+        </li>
+        <li>
+          <strong>长转写按行懒加载。</strong>
+          整段 <code>Text</code> 会在选中会议时同步排版全文，两三小时的会议足以卡住主线程。
+          拆成一行一个 <code>LazyVStack</code> 子视图后，只排版可见内容，逐行选择也还在。
+        </li>
+      </ul>
+
+      <p>
+        还有一处不是性能问题但同样要紧：状态点是<strong>会呼吸的</strong>。录音时红色 0.9 秒明暗循环，暂停变黄，生成纪要变蓝，失败变橙。
+        这不是装饰，它回答的是「它现在到底在干什么」——一个每分钟都要被问一次的问题。
+      </p>
+    </section>
+
+    <!-- ============ 03 ============ -->
+    <section id="s3">
+      <span class="num">03 —— 结构</span>
+      <h2>把最容易崩的东西挪到进程外</h2>
+
+      <p>
+        一个 SwiftUI 应用，两个由它拉起的原生推理进程。三者之间没有共享内存、没有私有 RPC、没有 Python，
+        只有 HTTP 和两套公开协议。
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 900 430" role="img" aria-label="应用进程与两个本机推理进程的关系图">
+          <defs>
+            <marker id="t1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#8C8C96"/>
+            </marker>
+            <marker id="t2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#3A3D8F"/>
+            </marker>
+          </defs>
+
+          <rect x="24" y="26" width="500" height="378" rx="14" fill="#FFFFFF" stroke="#CFCEC7" stroke-dasharray="6 5"/>
+          <text x="46" y="52" font-size="12.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">应用进程 · Swift 6 / SwiftUI</text>
+
+          <rect x="44" y="66" width="460" height="52" rx="9" fill="#EEEEF8" stroke="#C6C7E4"/>
+          <text x="60" y="88" font-size="13" font-weight="600" fill="#2C2E6F" font-family="-apple-system,PingFang SC">Views</text>
+          <text x="60" y="105" font-size="10.5" fill="#4A4A54" font-family="-apple-system,PingFang SC">三栏骨架 · 实时转写 · 纪要四节 · 设置</text>
+
+          <line x1="274" y1="118" x2="274" y2="136" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#t1)"/>
+
+          <rect x="44" y="140" width="460" height="60" rx="9" fill="#FFFFFF" stroke="#DAD9D3"/>
+          <text x="60" y="163" font-size="13.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">MeetingSession</text>
+          <text x="60" y="181" font-size="10.5" fill="#4A4A54" font-family="-apple-system,PingFang SC">状态机 · 1.5 s 节奏识别 · 切段 · 结束事务</text>
+
+          <line x1="274" y1="200" x2="274" y2="216" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#t1)"/>
+
+          <rect x="44" y="220" width="220" height="58" rx="9" fill="#FFFFFF" stroke="#DAD9D3"/>
+          <text x="60" y="242" font-size="12" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">EngineSupervisor</text>
+          <text x="60" y="259" font-size="10" fill="#4A4A54" font-family="-apple-system,PingFang SC">两个 worker 的状态与日志</text>
+
+          <rect x="284" y="220" width="220" height="58" rx="9" fill="#FFFFFF" stroke="#C6C7E4" stroke-width="1.6"/>
+          <text x="300" y="242" font-size="12" font-weight="600" fill="#2C2E6F" font-family="-apple-system,PingFang SC">EngineClient · actor</text>
+          <text x="300" y="259" font-size="10" fill="#4A4A54" font-family="-apple-system,PingFang SC">唯一发 HTTP 的地方</text>
+
+          <rect x="44" y="292" width="220" height="54" rx="9" fill="#F3F1EC" stroke="#DAD9D3"/>
+          <text x="60" y="314" font-size="11.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">AudioCaptureService</text>
+          <text x="60" y="331" font-size="10" fill="#4A4A54" font-family="-apple-system,PingFang SC">16 kHz · 单声道 · RMS</text>
+
+          <rect x="284" y="292" width="220" height="54" rx="9" fill="#F3F1EC" stroke="#DAD9D3"/>
+          <text x="300" y="314" font-size="11.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">MeetingsStore</text>
+          <text x="300" y="331" font-size="10" fill="#4A4A54" font-family="-apple-system,PingFang SC">一会议一个 JSON</text>
+
+          <text x="44" y="376" font-size="10.5" fill="#6B6B78" font-family="-apple-system,PingFang SC">全部数据落在 ~/Library/Application Support/Minutes</text>
+
+          <text x="560" y="52" font-size="12.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">本机推理进程 · Metal / arm64</text>
+
+          <rect x="560" y="66" width="316" height="146" rx="10" fill="#EAF3F3" stroke="#A9CFC9"/>
+          <text x="578" y="92" font-size="14" font-weight="600" fill="#0A5750" font-family="-apple-system,PingFang SC">audiocpp_server</text>
+          <text x="578" y="112" font-size="10.5" fill="#333941" font-family="ui-monospace,Menlo">audio.cpp @ 6f71a3b</text>
+          <text x="578" y="130" font-size="10.5" fill="#333941" font-family="-apple-system,PingFang SC">Qwen3-ASR-1.7B Q8_0 · 2.30 GiB</text>
+          <text x="578" y="152" font-size="11" font-weight="600" fill="#0A5750" font-family="ui-monospace,Menlo">127.0.0.1:8797</text>
+          <text x="578" y="172" font-size="10" fill="#333941" font-family="ui-monospace,Menlo">POST /v1/audio/transcriptions</text>
+          <text x="578" y="190" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">model = minutes-asr</text>
+
+          <rect x="560" y="228" width="316" height="146" rx="10" fill="#EFEBF7" stroke="#C9B8E4"/>
+          <text x="578" y="254" font-size="14" font-weight="600" fill="#5A3099" font-family="-apple-system,PingFang SC">llama-server</text>
+          <text x="578" y="274" font-size="10.5" fill="#333941" font-family="ui-monospace,Menlo">llama.cpp @ 513ad7a</text>
+          <text x="578" y="292" font-size="10.5" fill="#333941" font-family="-apple-system,PingFang SC">Qwen3.5-4B Q4_K_M · 2.55 GiB</text>
+          <text x="578" y="314" font-size="11" font-weight="600" fill="#5A3099" font-family="ui-monospace,Menlo">127.0.0.1:8788</text>
+          <text x="578" y="334" font-size="10" fill="#333941" font-family="ui-monospace,Menlo">POST /v1/chat/completions · SSE</text>
+          <text x="578" y="352" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">ctx 32768 · parallel 1 · 全量 GPU 层</text>
+
+          <path d="M504,246 L532,246 L532,139 L554,139" fill="none" stroke="#3A3D8F" stroke-width="1.5" marker-end="url(#t2)"/>
+          <path d="M504,262 L540,262 L540,301 L554,301" fill="none" stroke="#3A3D8F" stroke-width="1.5" marker-end="url(#t2)"/>
+
+          <text x="560" y="400" font-size="10.5" fill="#6B6B78" font-family="-apple-system,PingFang SC">仅监听回环地址 · 运行期无出网请求</text>
+          <text x="560" y="417" font-size="10.5" fill="#6B6B78" font-family="-apple-system,PingFang SC">两个进程互不感知，可独立崩溃恢复</text>
+        </svg>
+        <figcaption>
+          <b>图 1</b>　两个引擎是独立进程，不是库。注意 <code>EngineClient</code> 是整份代码里唯一发网络请求的类型；
+          <code>EngineSupervisor</code> 只聚合进程状态和日志，不碰数据面。
+        </figcaption>
+      </figure>
+
+      <h3>运行时契约</h3>
+      <p>进程边界一旦是架构的一等公民，两侧的约定就必须写清楚。下面是实际在跑的约定，不是设计意图的转述：</p>
+
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th style="width:20%">维度</th><th style="width:40%">ASR 侧</th><th>LLM 侧</th></tr></thead>
+          <tbody>
+            <tr><td>可执行文件</td><td class="m">engine/bin/audiocpp_server</td><td class="m">engine/bin/llama-server</td></tr>
+            <tr><td>默认端口</td><td>8797（避开常被占用的 8787）</td><td>8788</td></tr>
+            <tr><td>模型别名</td><td class="m">minutes-asr</td><td class="m">minutes-llm</td></tr>
+            <tr><td>启动参数</td><td>应用生成 <code>runtime/asr-&lt;port&gt;.json</code></td><td>纯命令行参数，无配置文件</td></tr>
+            <tr><td>数据面</td><td><code>multipart/form-data</code> + PCM16 WAV</td><td>JSON + <code>text/event-stream</code></td></tr>
+            <tr><td>身份证明</td><td><code>backend=metal</code> + <code>family=qwen3_asr</code> + 已加载</td><td><code>build_info</code> 非空 + <code>model_path</code> 一致</td></tr>
+            <tr><td>超时</td><td>单请求 600 s，资源 3600 s</td><td>启动探测 1.5 s，总等待 180 s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <div class="t">为什么不做内嵌</div>
+        <p>
+          内嵌（把推理当库直接链接）能省掉 HTTP 和进程管理，但会让三件事同时变糟：模型崩了等于应用崩了；权重内存常驻且不可回收；
+          应用重启必须重新加载几个 GB。当前形态每次识别多一次回环请求（亚毫秒量级），换来崩溃隔离和可以单独重启的引擎。
+        </p>
+        <p>对「一次会议要跑一两个小时」的场景，这笔交易是划算的。</p>
+      </div>
+    </section>
+
+    <!-- ============ 04 ============ -->
+    <section id="s4">
+      <span class="num">04 —— 流水线</span>
+      <h2>一条音频的旅程</h2>
+
+      <p>
+        从麦克风到一份可读纪要，中间八个环节。整条链上没有一处把音频或文本送出本机，只有三处异步：音频回调、识别请求、SSE 流。
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 900 372" role="img" aria-label="音频到纪要的主数据流水线">
+          <defs>
+            <marker id="p1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#8C8C96"/>
+            </marker>
+          </defs>
+
+          <rect x="20" y="44" width="184" height="88" rx="9" fill="#EEF1F9" stroke="#C6D2E6"/>
+          <text x="34" y="66" font-size="11.5" font-weight="600" fill="#1F5288" font-family="-apple-system,PingFang SC">① 采集</text>
+          <text x="34" y="86" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">AVAudioEngine tap</text>
+          <text x="34" y="103" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">原生格式 · 4096 帧</text>
+          <text x="34" y="120" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">实时音频线程</text>
+
+          <rect x="245" y="44" width="184" height="88" rx="9" fill="#EEF1F9" stroke="#C6D2E6"/>
+          <text x="259" y="66" font-size="11.5" font-weight="600" fill="#1F5288" font-family="-apple-system,PingFang SC">② 重采样</text>
+          <text x="259" y="86" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">每缓冲新建 converter</text>
+          <text x="259" y="103" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">→ 16 kHz 单声道</text>
+          <text x="259" y="120" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">float32，附 RMS</text>
+
+          <rect x="470" y="44" width="184" height="88" rx="9" fill="#EEF1F9" stroke="#C6D2E6"/>
+          <text x="484" y="66" font-size="11.5" font-weight="600" fill="#1F5288" font-family="-apple-system,PingFang SC">③ 累积缓冲</text>
+          <text x="484" y="86" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">AsyncStream 最新 64 块</text>
+          <text x="484" y="103" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">60 s 上限裁旧</text>
+          <text x="484" y="120" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">记录首尾偏移秒数</text>
+
+          <rect x="695" y="44" width="184" height="88" rx="9" fill="#EEF1F9" stroke="#C6D2E6"/>
+          <text x="709" y="66" font-size="11.5" font-weight="600" fill="#1F5288" font-family="-apple-system,PingFang SC">④ 每 1.5 s 识别</text>
+          <text x="709" y="86" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">快照 → WAV 上传</text>
+          <text x="709" y="103" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">非阻塞取名额</text>
+          <text x="709" y="120" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">中间结果灰色上屏</text>
+
+          <rect x="695" y="212" width="184" height="88" rx="9" fill="#EAF3F3" stroke="#A9CFC9"/>
+          <text x="709" y="234" font-size="11.5" font-weight="600" fill="#0A5750" font-family="-apple-system,PingFang SC">⑤ 切段判定</text>
+          <text x="709" y="254" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">句末标点 且 ≥5 s</text>
+          <text x="709" y="271" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">或段长 ≥15 s 强制切</text>
+          <text x="709" y="288" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">否则只更新中间文本</text>
+
+          <rect x="470" y="212" width="184" height="88" rx="9" fill="#EAF3F3" stroke="#A9CFC9"/>
+          <text x="484" y="234" font-size="11.5" font-weight="600" fill="#0A5750" font-family="-apple-system,PingFang SC">⑥ 落定分段</text>
+          <text x="484" y="254" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">按录制时间排序</text>
+          <text x="484" y="271" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">重新编号 · 代次 +1</text>
+          <text x="484" y="288" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">只吞掉快照覆盖的前缀</text>
+
+          <rect x="245" y="212" width="184" height="88" rx="9" fill="#EFEBF7" stroke="#C9B8E4"/>
+          <text x="259" y="234" font-size="11.5" font-weight="600" fill="#5A3099" font-family="-apple-system,PingFang SC">⑦ 生成纪要</text>
+          <text x="259" y="254" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">冲刷残余音频</text>
+          <text x="259" y="271" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">12000 字符分块 map</text>
+          <text x="259" y="288" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">reduce 成四节结构</text>
+
+          <rect x="20" y="212" width="184" height="88" rx="9" fill="#FFFFFF" stroke="#DAD9D3"/>
+          <text x="34" y="234" font-size="11.5" font-weight="600" fill="#16161A" font-family="-apple-system,PingFang SC">⑧ 保存</text>
+          <text x="34" y="254" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">atomic 写入</text>
+          <text x="34" y="271" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">一场会议一个 JSON</text>
+          <text x="34" y="288" font-size="10" fill="#333941" font-family="-apple-system,PingFang SC">落盘成功才更新内存</text>
+
+          <line x1="204" y1="88" x2="239" y2="88" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+          <line x1="429" y1="88" x2="464" y2="88" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+          <line x1="654" y1="88" x2="689" y2="88" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+          <line x1="787" y1="132" x2="787" y2="206" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+          <line x1="695" y1="256" x2="660" y2="256" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+          <line x1="470" y1="256" x2="435" y2="256" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+          <line x1="245" y1="256" x2="210" y2="256" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#p1)"/>
+
+          <text x="20" y="334" font-size="10.5" fill="#4A505A" font-family="-apple-system,PingFang SC">① tap 必须传总线原生格式，请求别的采样率会直接 SIGSEGV；converter 有状态，跨缓冲复用会静默丢数据。</text>
+          <text x="20" y="354" font-size="10.5" fill="#4A505A" font-family="-apple-system,PingFang SC">④ 与 ⑤ 不是一问一答：缓冲在识别期间继续增长，回来的是对旧快照的判断——这正是需要代次校验的根因。</text>
+        </svg>
+        <figcaption>
+          <b>图 2</b>　上半段（蓝）是音频侧，下半段（青/紫）是文本侧。全程没有 VAD，也没有服务端流式识别。
+        </figcaption>
+      </figure>
+
+      <h3>节奏参数，都在一个文件顶部</h3>
+
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th style="width:34%">参数</th><th style="width:16%">值</th><th>为什么是这个值</th></tr></thead>
+          <tbody>
+            <tr><td><code>pollInterval</code></td><td class="m">1.5 s</td><td>离线识别 25 秒音频约 0.96 秒，这个节奏留了 1.5 倍余量；再密就是空转</td></tr>
+            <tr><td><code>minCloseSeconds</code></td><td class="m">5 s</td><td>防止「嗯。」「好。」这类极短句被切成独立段，避免分段碎片化</td></tr>
+            <tr><td><code>maxSegmentSeconds</code></td><td class="m">15 s</td><td>连续讲述没有标点时的兜底切分，保证时间戳密度</td></tr>
+            <tr><td><code>bufferCapSeconds</code></td><td class="m">60 s</td><td>覆盖引擎崩溃自愈窗口；超出丢最旧，防止内存无界</td></tr>
+            <tr><td><code>TranscriptionGate.limit</code></td><td class="m">2</td><td>让「正在进行」与「刚完成」的识别有重叠，又不至于排队雪崩</td></tr>
+            <tr><td>最短音频</td><td class="m">0.5 s</td><td><code>samples &lt; 8000</code> 直接返回空文本，不触发模型推理</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <div class="t">为什么没有 VAD</div>
+        <p>
+          代码注释写得很直白：<em>能量阈值在复杂声学环境下不可靠</em>——噪声爬升会漏检，切句点会断词。而这类误判的后果是漏字和断词，
+          用户自己没法修。
+        </p>
+        <p>
+          于是断句被从声学搬到了文本：固定 1.5 秒送一次识别，用 ASR 自己给出的句末标点判断能否落段，超过 15 秒再强制切。
+          最坏情况只是分段粒度不理想，<strong>文字本身仍然完整</strong>——把不可恢复的错误降级成可恢复的瑕疵，这是整条链上最值得抄的一个决定。
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ 05 ============ -->
+    <section id="s5">
+      <span class="num">05 —— 并发</span>
+      <h2>三个计数器，换掉三类难查的 bug</h2>
+
+      <p>
+        并发识别有三个天然会出错的地方：同时压太多请求、慢回来的旧结果覆盖了新文本、完成顺序不等于音频顺序。
+        三个问题各配一个极小机制，加起来不到 80 行。
+      </p>
+
+      <h3>闸门 —— 宁可丢，不可堵</h3>
+      <p>
+        <code>TranscriptionGate</code> 是一个 <code>actor</code> 信号量，<code>limit = 2</code>，但提供两种取法，语义完全不同：
+      </p>
+      <ul class="plain">
+        <li><code>tryAcquire()</code>：<strong>宁可丢，不可堵</strong>。1.5 秒节奏的中间结果用它——拿不到名额就跳过这一轮，1.5 秒后还有机会。</li>
+        <li><code>acquire()</code>：<strong>必须拿到</strong>。会议结束时冲刷缓冲用它——最后一段音频丢了就永久丢了，值得等。</li>
+      </ul>
+      <p>
+        全用阻塞版，引擎一慢请求就堆积、越堆越慢、最后超时丢一片；全用非阻塞版，收尾那段音频可能永远等不到名额。
+      </p>
+
+      <h3>代次 —— 迟到结果直接作废</h3>
+      <p>
+        每次送识别前先记下当前代次。切段与冲刷都会让 <code>interimGeneration</code> 加一，结果回来后先比代次，不等就整块丢弃：
+      </p>
+
+      <pre><code><span class="cmt">// MeetingSession.pollRecognition — 三道 guard，任何一道不过就安静退出</span>
+<span class="kw">guard</span> snapshot.generation == interimGeneration, !buffer.isEmpty <span class="kw">else</span> { <span class="kw">return</span> }
+<span class="kw">guard</span> isReady(.asr) <span class="kw">else</span> { <span class="kw">return</span> }
+<span class="kw">guard await</span> gate.tryAcquire() <span class="kw">else</span> { <span class="kw">return</span> }</code></pre>
+
+      <p>
+        没有这一层，一个慢回来的识别结果会把已经落定的分段又写成中间文本，用户看到的是「刚说过的字退回去」。
+        这种 bug 不可稳定复现，只能靠机制预防。
+      </p>
+
+      <h3>排序 —— 完成顺序与音频顺序解耦</h3>
+      <p>
+        落定的时候不假设顺序。每追加一段就按录制时间轴重排、重新编号，晚到的第 5 段不会插到第 4 段前面：
+      </p>
+
+      <pre><code><span class="cmt">// MeetingSession.appendSegment — 时间轴是唯一真相，sequence 是它的投影</span>
+meeting.segments.append(segment)
+meeting.segments.sort {
+    $0.start == $1.start ? $0.end &lt; $1.end : $0.start &lt; $1.start
+}
+<span class="kw">for</span> index <span class="kw">in</span> meeting.segments.indices { meeting.segments[index].sequence = index }</code></pre>
+
+      <p>
+        时间戳来自 Swift 的采集时钟，不依赖模型输出——模型只负责文字，不负责它到底发生在第几秒。
+      </p>
+
+      <div class="note">
+        <div class="t">结束是一次事务，不是一串调用</div>
+        <p>
+          <code>finish()</code> 会被写成一个可等待的事务：重复点「结束」等的是同一个 <code>Task</code>，不会重复识别、重复生成、重复保存。
+          顺序也固定为<strong>先 drain 在飞任务并冲刷缓冲 → 生成纪要 → 保存落盘</strong>，任何一步失败都停在 <code>failed</code> 并保留检查点，可以重试。
+          空会议不能完成，标题生成超时也不能阻塞保存。
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ 06 ============ -->
+    <section id="s6">
+      <span class="num">06 —— 健康</span>
+      <h2>「就绪」不是布尔值，是一个待证明的身份</h2>
+
+      <p>
+        端口上有人应答 HTTP 200，不等于「我的模型加载好了」。上一版遗留的 Python worker 也会返回 200，别的 llama.cpp 实例也会。
+        所以健康检查要证明三件事，任何一件不符就判 <code>incompatible</code>，而不是 <code>ready</code>：
+      </p>
+
+      <div class="trio">
+        <div class="card">
+          <span class="tag">① 运行时</span>
+          <h4>它得是我认识的那个程序</h4>
+          <p>LLM 要求 <code>/props</code> 返回非空 <code>build_info</code>；ASR 要求 <code>health.backend == "metal"</code> 且有版本字段。旧 Python 服务没有这些。</p>
+        </div>
+        <div class="card">
+          <span class="tag">② 路径</span>
+          <h4>它得加载着我要的那个模型</h4>
+          <p>服务自报的模型路径与设置里的期望路径，各自做波浪号展开、标准化、符号链接归一，然后逐字符比对。</p>
+        </div>
+        <div class="card">
+          <span class="tag">③ 加载</span>
+          <h4>它得真的加载完了</h4>
+          <p>LLM 要求 <code>is_sleeping</code> 为假；ASR 要求模型条目 <code>loaded</code> 为真。否则判 <code>starting</code>，继续等。</p>
+        </div>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 900 268" role="img" aria-label="健康探测的三种结果与对应动作">
+          <defs>
+            <marker id="h1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#8C8C96"/>
+            </marker>
+          </defs>
+
+          <rect x="296" y="24" width="308" height="46" rx="9" fill="#16161A"/>
+          <text x="450" y="52" text-anchor="middle" font-size="12.5" fill="#FFFFFF" font-family="ui-monospace,Menlo">GET /health + /props</text>
+
+          <line x1="360" y1="70" x2="200" y2="112" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#h1)"/>
+          <line x1="450" y1="70" x2="450" y2="112" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#h1)"/>
+          <line x1="540" y1="70" x2="700" y2="112" stroke="#8C8C96" stroke-width="1.4" marker-end="url(#h1)"/>
+
+          <rect x="30" y="118" width="300" height="96" rx="9" fill="#FBF1E1" stroke="#EBCFA6"/>
+          <text x="48" y="142" font-size="12.5" font-weight="600" fill="#8A4C06" font-family="ui-monospace,Menlo">incompatible</text>
+          <text x="48" y="162" font-size="11" fill="#6B4A1A" font-family="-apple-system,PingFang SC">有服务，但不是我的那个</text>
+          <text x="48" y="182" font-size="11" fill="#6B4A1A" font-family="-apple-system,PingFang SC">立即失败：请停旧服务或改端口</text>
+          <text x="48" y="200" font-size="10" fill="#8A6A3A" font-family="-apple-system,PingFang SC">不重复拉起，也不静默接管</text>
+
+          <rect x="350" y="118" width="200" height="96" rx="9" fill="#F7F6F3" stroke="#D8D7D1"/>
+          <text x="368" y="142" font-size="12.5" font-weight="600" fill="#4A4A54" font-family="ui-monospace,Menlo">starting</text>
+          <text x="368" y="162" font-size="11" fill="#5A5A64" font-family="-apple-system,PingFang SC">模型还在加载</text>
+          <text x="368" y="182" font-size="11" fill="#5A5A64" font-family="-apple-system,PingFang SC">轮询等它 ready</text>
+
+          <rect x="570" y="118" width="300" height="96" rx="9" fill="#EAF4EE" stroke="#BFD8BF"/>
+          <text x="588" y="142" font-size="12.5" font-weight="600" fill="#1B5820" font-family="ui-monospace,Menlo">ready</text>
+          <text x="588" y="162" font-size="11" fill="#3A5A3C" font-family="-apple-system,PingFang SC">三重校验全部通过</text>
+          <text x="588" y="182" font-size="11" fill="#3A5A3C" font-family="-apple-system,PingFang SC">开始服务，转 5 秒存活监测</text>
+          <text x="588" y="200" font-size="10" fill="#4A6A4C" font-family="-apple-system,PingFang SC">外部服务没有进程句柄，必须另盯</text>
+
+          <text x="30" y="248" font-size="10.5" fill="#4A505A" font-family="-apple-system,PingFang SC">第四种情况：端口完全无人应答（unavailable）—— 自己拉起进程，最多等 180 秒它变 ready。</text>
+        </svg>
+        <figcaption>
+          <b>图 3</b>　三态而不是布尔。这让「旧进程还没退干净」「端口被别的服务占了」从玄学变成一句明确报错。
+        </figcaption>
+      </figure>
+
+      <h3>两条不显眼但必要的卫生</h3>
+      <p>
+        拉起子进程前，代码会从环境里删掉 <code>DYLD_LIBRARY_PATH</code> 和 <code>DYLD_FALLBACK_LIBRARY_PATH</code>。
+        否则在 Xcode 里启动应用时，继承来的这两个变量会让 <code>llama-server</code> 加载到错误版本的动态库——表现是启动即崩溃，日志里什么也看不出。
+      </p>
+      <p>
+        <strong>启动即退出不重试。</strong> ready 态崩了就退避重试（6 / 12 / 24 / 48 秒封顶），<code>starting</code> 阶段就退出则直接把日志摆出来：
+        模型路径写错、端口被占、GGUF 与二进制不匹配——这类错误重试一万次也是同样的结果，只会把 CPU 吃满、把真正的原因刷没。
+      </p>
+    </section>
+
+    <!-- ============ 07 ============ -->
+    <section id="s7">
+      <span class="num">07 —— 供应链</span>
+      <h2>「可复现」得写成脚本，不是写进 README</h2>
+
+      <p>
+        从 <code>git clone</code> 到「字节级可验证的引擎」，中间隔着一份 19 行的锁文件、两个脚本，和一道 <code>otool</code> 门禁。
+        上游提交、模型修订、字节数、SHA256 全部收敛到 <code>Engine/dependencies.lock</code> 一处：
+      </p>
+
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th style="width:28%">锁定项</th><th style="width:32%">值</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td>audio.cpp 提交</td><td class="m">6f71a3b87105…</td><td>ASR 服务源码</td></tr>
+            <tr><td>llama.cpp 提交</td><td class="m">513ad7ae0770…</td><td>LLM 服务源码</td></tr>
+            <tr><td>ASR 权重</td><td class="m">Qwen3-ASR-1.7B Q8_0</td><td class="m">2,473,017,600 B · SHA256</td></tr>
+            <tr><td>LLM 权重</td><td class="m">Qwen3.5-4B Q4_K_M</td><td class="m">2,740,937,888 B · SHA256</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>构建脚本的四道门</h3>
+      <ol class="steps">
+        <li><strong>工具存在性</strong>逐个检查 <code>git cmake clang++ xcrun curl install otool codesign tar</code> 与 metal 编译器。缺任何一个都在第 0 秒失败，而不是编译到一半。</li>
+        <li><strong>源码获取三路</strong><code>git fetch --depth 1</code> 优先，失败则下同提交的 tarball，再失败用已验证过的本地归档。每路都留提交印记。</li>
+        <li><strong>二进制卫生</strong><code>otool -L</code> 扫产物，出现 <code>Python.framework</code>、<code>Torch</code>、<code>MLX</code>、<code>ffmpeg</code>、<code>/opt/homebrew</code> 就报错退出。「零 Python」不是口号，是门禁。</li>
+        <li><strong>原子安装</strong>先 <code>install -m 755</code> 到临时名，再 <code>mv</code> 覆盖，最后 ad-hoc <code>codesign</code>。应用运行中升级不会读到半个可执行文件。</li>
+      </ol>
+
+      <h3>下载脚本：把断点续传做对</h3>
+      <p>
+        不用 <code>huggingface-cli</code>，也不用 pip。只有 <code>curl</code>、<code>shasum</code>、<code>stat</code>、<code>xargs</code>，代价是要自己处理分块。
+        几个细节说明作者确实踩过：
+      </p>
+      <ul class="plain">
+        <li>每块用 <code>--range</code>，并<strong>校验 HTTP 状态必须是 206</strong>——服务器不支持 Range 时会返回 200 和整个文件，不校验就会拼出四倍大小的垃圾。</li>
+        <li>先写 <code>.download</code> 临时文件，长度正确才 <code>mv</code>；失败的块不会污染已完成的块。</li>
+        <li>分块文件名零填充序号，<code>cat chunk.*</code> 的展开顺序就是字节顺序，不需要额外排序。</li>
+        <li>换镜像时<strong>保留已完成块</strong>，只补缺的那部分。镜像只影响传输，不影响验收：ModelScope → hf-mirror → Hugging Face 依次尝试，无论从哪来，最后都要对上锁文件里的字节数与 SHA256。</li>
+      </ul>
+    </section>
+
+    <!-- ============ 08 ============ -->
+    <section id="s8">
+      <span class="num">08 —— 性能</span>
+      <h2>原生快了多少，以及慢在哪</h2>
+
+      <p>
+        从 PyTorch/MPS + MLX 换到 audio.cpp + llama.cpp 的 Metal 原生服务，六个指标里五个变好、一个变差。
+        这张图里没有任何一项被拿掉。
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 900 440" role="img" aria-label="旧版与原生版的六项指标对比，每行以旧版为 100%">
+          <rect x="300" y="18" width="11" height="11" rx="2" fill="#C9CDD4"/>
+          <text x="317" y="28" font-size="10.5" fill="#333941" font-family="-apple-system,PingFang SC">旧版</text>
+          <rect x="360" y="18" width="11" height="11" rx="2" fill="#3A3D8F"/>
+          <text x="377" y="28" font-size="10.5" fill="#333941" font-family="-apple-system,PingFang SC">原生</text>
+          <text x="440" y="28" font-size="10.5" fill="#4A505A" font-family="-apple-system,PingFang SC">每行以旧版 = 100% 归一化</text>
+
+          <text x="300" y="50" font-size="10" fill="#8C8C96" text-anchor="middle" font-family="-apple-system">0</text>
+          <text x="410" y="50" font-size="10" fill="#8C8C96" text-anchor="middle" font-family="-apple-system">50%</text>
+          <text x="520" y="50" font-size="10" fill="#8C8C96" text-anchor="middle" font-family="-apple-system">100%</text>
+          <text x="572" y="50" font-size="10" fill="#8C8C96" text-anchor="middle" font-family="-apple-system">120%</text>
+
+          <line x1="520" y1="58" x2="520" y2="382" stroke="#DFDBD2" stroke-width="1" stroke-dasharray="4 4"/>
+
+          <text x="290" y="87" font-size="11" fill="#16161A" text-anchor="end" font-family="-apple-system,PingFang SC">ASR · 11.4 秒音频</text>
+          <rect x="300" y="76" width="220" height="14" rx="3" fill="#C9CDD4"/>
+          <text x="536" y="87" font-size="10.5" fill="#5A5A64" font-family="-apple-system">1.061 s</text>
+          <rect x="300" y="96" width="113" height="14" rx="3" fill="#3A3D8F"/>
+          <text x="536" y="107" font-size="10.5" fill="#5A5A64" font-family="-apple-system">0.545 s</text>
+
+          <text x="290" y="139" font-size="11" fill="#16161A" text-anchor="end" font-family="-apple-system,PingFang SC">ASR · 25 秒音频</text>
+          <rect x="300" y="128" width="220" height="14" rx="3" fill="#C9CDD4"/>
+          <text x="536" y="139" font-size="10.5" fill="#5A5A64" font-family="-apple-system">1.909 s</text>
+          <rect x="300" y="148" width="110" height="14" rx="3" fill="#3A3D8F"/>
+          <text x="536" y="159" font-size="10.5" fill="#5A5A64" font-family="-apple-system">0.957 s</text>
+
+          <text x="290" y="191" font-size="11" fill="#16161A" text-anchor="end" font-family="-apple-system,PingFang SC">LLM · 单次纪要总耗时</text>
+          <rect x="300" y="180" width="220" height="14" rx="3" fill="#C9CDD4"/>
+          <text x="536" y="191" font-size="10.5" fill="#5A5A64" font-family="-apple-system">2.996 s</text>
+          <rect x="300" y="200" width="202" height="14" rx="3" fill="#3A3D8F"/>
+          <text x="536" y="211" font-size="10.5" fill="#5A5A64" font-family="-apple-system">2.755 s</text>
+
+          <text x="290" y="243" font-size="11" fill="#16161A" text-anchor="end" font-family="-apple-system,PingFang SC">LLM · 生成速度</text>
+          <rect x="300" y="232" width="220" height="14" rx="3" fill="#C9CDD4"/>
+          <text x="536" y="243" font-size="10.5" fill="#5A5A64" font-family="-apple-system">85.30 tok/s</text>
+          <rect x="300" y="252" width="208" height="14" rx="3" fill="#B45309"/>
+          <text x="536" y="263" font-size="10.5" fill="#8F3F06" font-family="-apple-system">80.76 tok/s</text>
+
+          <text x="290" y="295" font-size="11" fill="#16161A" text-anchor="end" font-family="-apple-system,PingFang SC">ASR · phys_footprint</text>
+          <rect x="300" y="284" width="220" height="14" rx="3" fill="#C9CDD4"/>
+          <text x="536" y="295" font-size="10.5" fill="#5A5A64" font-family="-apple-system">6,245 MB</text>
+          <rect x="300" y="304" width="108" height="14" rx="3" fill="#3A3D8F"/>
+          <text x="536" y="315" font-size="10.5" fill="#5A5A64" font-family="-apple-system">3,065 MB</text>
+
+          <text x="290" y="347" font-size="11" fill="#16161A" text-anchor="end" font-family="-apple-system,PingFang SC">LLM · phys_footprint</text>
+          <rect x="300" y="336" width="220" height="14" rx="3" fill="#C9CDD4"/>
+          <text x="536" y="347" font-size="10.5" fill="#5A5A64" font-family="-apple-system">3,543 MB</text>
+          <rect x="300" y="356" width="79" height="14" rx="3" fill="#3A3D8F"/>
+          <text x="536" y="367" font-size="10.5" fill="#5A5A64" font-family="-apple-system">1,284 MB</text>
+
+          <text x="300" y="404" font-size="10.5" fill="#8F3F06" font-family="-apple-system,PingFang SC">琥珀色这一行是唯一的退步：纯生成速度下降约 5%，不能宣称「原生全面更快」。</text>
+          <text x="300" y="422" font-size="10.5" fill="#4A505A" font-family="-apple-system,PingFang SC">内存取 phys_footprint 口径；两者的 RSS 反而上升，所以要并列看。</text>
+        </svg>
+        <figcaption>
+          <b>图 4</b>　六项指标归一化对比（旧版 = 100%）。ASR 是这次迁移的最大受益者：两种音频长度耗时都降到约一半，footprint 降 51%。
+          LLM 则是「总耗时小幅改善、纯生成速度小幅退步」的混合结果。
+        </figcaption>
+      </figure>
+
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th style="width:34%">指标</th><th style="width:20%">旧版</th><th style="width:22%">原生</th><th>变化</th></tr></thead>
+          <tbody>
+            <tr><td>ASR 11.4 s 音频</td><td class="m">1.061 s（RTF 0.093）</td><td class="m">0.545 s（RTF 0.048）</td><td class="yes">−49%</td></tr>
+            <tr><td>ASR 25 s 音频</td><td class="m">1.909 s（RTF 0.076）</td><td class="m">0.957 s（RTF 0.038）</td><td class="yes">−50%</td></tr>
+            <tr><td>LLM 总耗时</td><td class="m">2.996 s</td><td class="m">2.755 s</td><td class="yes">−8%</td></tr>
+            <tr><td>LLM 生成速度</td><td class="m">85.30 tok/s</td><td class="m">80.76 tok/s</td><td><strong style="color:var(--warn)">−5%</strong></td></tr>
+            <tr><td>ASR footprint</td><td class="m">6,245 MB</td><td class="m">3,065 MB</td><td class="yes">−51%</td></tr>
+            <tr><td>LLM footprint</td><td class="m">3,543 MB</td><td class="m">1,284 MB</td><td class="yes">−64%</td></tr>
+            <tr><td>ASR RSS</td><td class="m">约 1.02 GiB</td><td class="m">约 3.09 GiB</td><td style="color:var(--warn)">+202%</td></tr>
+            <tr><td>LLM RSS</td><td class="m">约 3.37 GiB</td><td class="m">约 3.87 GiB</td><td style="color:var(--warn)">+15%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <div class="t">为什么不能只报一个内存数字</div>
+        <p>
+          「原生内存降低 51%」和「原生 RSS 上升 202%」两句同时为真。<code>llama.cpp</code> 用 <code>mmap</code> 映射 GGUF，RSS 把映射页也算进去，
+          看起来更大；<code>phys_footprint</code> 更接近系统实际承压。只引用一半，就是选择性陈述。
+        </p>
+      </div>
+
+      <p>
+        量化带来的质量差异也被写下来了：同一个 25 秒样本，旧版开头识别成「数据合在一起…总出力…」，新版是「时聚合在一起…总处理…」。
+        基准文档的结论是<em>「Q8 不能视为与 FP16 完全等价」</em>，并且明确写了「当前样本没有人工校对参考文本，因此不虚构 CER/WER」。
+        在一个很容易吹指标的领域，这两句话比任何数字都值钱。
+      </p>
+    </section>
+
+    <!-- ============ 09 ============ -->
+    <section id="s9">
+      <span class="num">09 —— 边界</span>
+      <h2>它做不到什么</h2>
+
+      <h4>每 1.5 秒一轮，不是逐字浮现</h4>
+      <p>
+        识别是离线轮询：把当前完整缓冲整体送一次，回来替换中间文本。感知是「说完一句，半秒到一秒后上屏」。
+        要做到真正的逐字流式，得换服务端增量识别——那是另一个协议，不是调个参数。
+      </p>
+
+      <h4>没有说话人分离，也没有词级时间戳</h4>
+      <p>
+        片段时间戳由 Swift 的采集时钟生成，精度是「段」，不是「词」。要区分谁在说话，需要引入 diarization 模型，
+        是另一个量级的工程量——现有代码里没有留这个钩子。
+      </p>
+
+      <h4>上下文 32768、单请求槽</h4>
+      <p>
+        4B 模型上要控内存和首 token 延迟。长会议靠 12000 字符分块的 map-reduce 绕开，而不是靠更大的窗口。
+        代价是两小时的会议要串行压 N 次，中间能看见「第 2/7 段整理」这样的进度。
+      </p>
+
+      <h4>首次安装不轻</h4>
+      <p>
+        Xcode 命令行工具、CMake、Git、curl，两个引擎在本机编译（Release + Metal），4.86 GiB 权重下载并逐个校验。
+        装完之前，它不是一个「双击就能用」的 App——这也是为什么它更适合愿意自己编译的人。
+      </p>
+
+      <h4>沙箱未启用</h4>
+      <p>
+        应用需要访问任意路径的 GGUF 和本机端口，<code>CODE_SIGN_ENTITLEMENTS</code> 为空。
+        这既意味着它不可能上架 App Store，也意味着自己编译运行是最合理的使用方式。
+      </p>
+    </section>
+
+    <!-- ============ 10 ============ -->
+    <section id="s10">
+      <span class="num">10 —— 开始</span>
+      <h2>三步，然后就能开会</h2>
+
+      <pre><code><span class="cmt"># 1. 构建并安装固定提交的 audio.cpp / llama.cpp（Release + Metal）</span>
+bash scripts/bootstrap.sh
+
+<span class="cmt"># 2. 下载固定修订的 GGUF，并验证字节数与 SHA256</span>
+bash scripts/download_models.sh
+
+<span class="cmt"># 3. 打开工程，编译运行</span>
+open Minutes.xcodeproj</code></pre>
+
+      <p>
+        三个脚本都<strong>不要加 <code>sudo</code></strong>。引擎和模型装在当前用户的 <code>~/Library/Application Support/Minutes</code>，
+        用 root 跑会去查 root 的目录，结果是应用找不到文件——这条提示同时写在 README 和脚本开头，因为它一定会有人踩。
+      </p>
+
+      <pre><code>~/Library/Application Support/Minutes/
+├── engine/bin/                 <span class="cmt"># audiocpp_server、llama-server</span>
+└── models/
+    ├── Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf
+    └── Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf</code></pre>
+
+      <p>
+        首次运行在系统设置里允许「纪要」使用麦克风。启动后工具栏会实时显示两个模型的状态，语音识别就绪后就能新建会议；
+        会议结束后双击纪要页标题即可改名并自动保存。
+      </p>
+
+      <h3>想验证「真的跑通了」</h3>
+      <p>
+        单元测试用的是打桩与纯函数，不碰真实模型。要验证真进程、真模型、真音频，用闭环脚本：
+      </p>
+
+      <pre><code>MINUTES_SMOKE_ASR=/path/to/real_zh_16k.f32 \
+MINUTES_SMOKE_LLM=1 \
+bash scripts/verify_native.sh</code></pre>
+
+      <p>
+        它用 <code>swiftc</code> 把源码编成一个独立可执行文件，<strong>不经过 XCTest 宿主</strong>——因为环境变量在宿主里常常传不进去，
+        依赖它的断言会静默跳过，测试显示「全部通过」，实际什么也没验。三道断言都是内容级的：ASR 结果里必须出现「虚拟电厂」，
+        LLM 输出必须同时有 <code>## 摘要</code> 与 <code>## 行动项</code>、且不得包含 <code>&lt;think&gt;</code>，
+        map-reduce 必须能从远超 12000 字符的输入里产出非空摘要。
+      </p>
+
+      <a class="more" href="architecture.html">
+        <span class="t">深入一层</span>
+        <span class="h">架构详解：源码逐行的核对版 →</span>
+        <span class="d">十三个章节，从进程契约、并发隔离域到供应链门禁与性能基线。每个结论都附文件与行号，可以逐条证伪。</span>
+      </a>
+    </section>
+
+    </main>
+
+    <footer>
+      <div class="r">
+        <span>纪要 0.1.0 · 23 个 Swift 文件 / 3,296 行 · 仓库暂未附许可证</span>
+        <span>对应提交 <code>909d6c2</code> · 文档 2026-11-19</span>
+      </div>
+    </footer>
+    </div>
+  </div>
+</div>
+</body>
+</html>

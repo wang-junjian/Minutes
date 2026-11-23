@@ -2,6 +2,8 @@
 
 macOS 原生智能会议纪要应用。音频与文本只在本机处理，不上传到云端。
 
+项目主页：<https://wang-junjian.github.io/Minutes/>（含架构、流水线与性能说明）· 深入版：<https://wang-junjian.github.io/Minutes/architecture.html>
+
 - **ASR**：[audio.cpp](https://github.com/0xShug0/audio.cpp) + Qwen3-ASR-1.7B Q8_0 GGUF（Metal）
 - **LLM**：[llama.cpp](https://github.com/ggml-org/llama.cpp) + Qwen3.5-4B Q4_K_M GGUF（Metal）
 - **应用**：SwiftUI / Swift 6；推理、构建、模型下载均不依赖 Python
