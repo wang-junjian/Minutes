@@ -80,8 +80,35 @@ actor EngineClient {
         let content: String
     }
 
+    /// AsyncThrowingStream 在消费者任务取消时可能先正常结束，吞掉生产者随后
+    /// 补发的错误。这个薄包装在每次 next() 出口检查取消，保证直接消费者
+    /// 也不会把取消后的部分文本当成完整结果。
+    struct ChatStream: AsyncSequence, Sendable {
+        typealias Element = String
+
+        private let stream: AsyncThrowingStream<String, Error>
+
+        init(_ stream: AsyncThrowingStream<String, Error>) {
+            self.stream = stream
+        }
+
+        func makeAsyncIterator() -> Iterator {
+            Iterator(base: stream.makeAsyncIterator())
+        }
+
+        struct Iterator: AsyncIteratorProtocol {
+            var base: AsyncThrowingStream<String, Error>.Iterator
+
+            mutating func next() async throws -> String? {
+                let element = try await base.next()
+                try Task.checkCancellation()
+                return element
+            }
+        }
+    }
+
     /// 流式对话：逐内容块回调，保持对既有会议/纪要调用方的接口不变。
-    func streamChat(messages: [ChatMessage], baseURL: URL, temperature: Double = 0.3) -> AsyncThrowingStream<String, Error> {
+    func streamChat(messages: [ChatMessage], baseURL: URL, temperature: Double = 0.3) -> ChatStream {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -95,7 +122,7 @@ actor EngineClient {
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        return AsyncThrowingStream { continuation in
+        let stream = AsyncThrowingStream<String, Error> { continuation in
             let task = Task {
                 do {
                     let (bytes, response) = try await session.bytes(for: request)
@@ -121,10 +148,10 @@ actor EngineClient {
                     try parser.finish()
                     continuation.finish()
                 } catch is CancellationError {
-                    continuation.finish()
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     if Task.isCancelled {
-                        continuation.finish()
+                        continuation.finish(throwing: CancellationError())
                     } else {
                         continuation.finish(throwing: error)
                     }
@@ -132,6 +159,7 @@ actor EngineClient {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+        return ChatStream(stream)
     }
 
     // MARK: - Helpers

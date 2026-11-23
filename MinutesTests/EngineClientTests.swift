@@ -48,6 +48,40 @@ final class EngineClientTests: XCTestCase {
         XCTAssertEqual(output, "## 摘要\n完成")
     }
 
+    func testCancellationAfterPartialContentThrows() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SuspendedStreamURLProtocolStub.self]
+        let client = EngineClient(session: URLSession(configuration: configuration))
+        let firstChunk = FirstChunkFlag()
+        let consumption = Task<String, Error> {
+            var output = ""
+            for try await chunk in await client.streamChat(
+                messages: [.init(role: "user", content: "测试")],
+                baseURL: URL(string: "http://127.0.0.1:8788")!
+            ) {
+                output += chunk
+                await firstChunk.mark()
+            }
+            return output
+        }
+        for _ in 0..<1_000 {
+            if await firstChunk.value { break }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let receivedFirstChunk = await firstChunk.value
+        XCTAssertTrue(receivedFirstChunk)
+
+        consumption.cancel()
+        do {
+            let output = try await consumption.value
+            XCTFail("取消不应正常返回部分内容：\(output)")
+        } catch is CancellationError {
+            // 预期取消错误。
+        } catch {
+            XCTFail("取消错误被替换：\(error)")
+        }
+    }
+
     func testHTTPErrorMessageIsPropagated() async {
         URLProtocolStub.setHandler { request in
             Self.response(request: request, status: 500, json: ["error": ["message": "native failure"]])
@@ -89,6 +123,29 @@ final class EngineClientTests: XCTestCase {
     private static func response(request: URLRequest, status: Int, body: Data) -> (HTTPURLResponse, Data) {
         (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, body)
     }
+}
+
+private actor FirstChunkFlag {
+    private(set) var value = false
+    func mark() { value = true }
+}
+
+private final class SuspendedStreamURLProtocolStub: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"半篇\"}}]}\n\n"
+        client?.urlProtocol(self, didLoad: Data(chunk.utf8))
+        // 故意不结束响应，让测试能在部分内容后取消。
+    }
+
+    override func stopLoading() {}
 }
 
 private final class URLProtocolStub: URLProtocol, @unchecked Sendable {
