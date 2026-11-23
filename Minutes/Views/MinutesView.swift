@@ -1,0 +1,187 @@
+import SwiftUI
+
+/// 历史会议的纪要视图。
+struct MinutesView: View {
+    let meeting: Meeting
+
+    @Environment(MeetingsStore.self) private var store
+    @Environment(EngineSupervisor.self) private var supervisor
+    @State private var isRegenerating = false
+    @State private var progressText = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                header
+                if isRegenerating {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(progressText.isEmpty ? "正在生成纪要…" : progressText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let minutes = meeting.minutes {
+                    structuredSections(minutes)
+                }
+                transcriptSection
+            }
+            .padding(28)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .navigationTitle(meeting.title)
+        .toolbar {
+            ToolbarItemGroup {
+                Button {
+                    regenerate()
+                } label: {
+                    Label("重新生成", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(isRegenerating || transcript.isEmpty || supervisor.states[.llm] != .ready)
+                .help("使用当前提示词设置重新生成纪要")
+            }
+        }
+    }
+
+    /// 用于生成/重生成的转写全文。
+    private var transcript: String {
+        meeting.transcriptText.isEmpty
+            ? meeting.segments.map(\.text).joined(separator: "\n")
+            : meeting.transcriptText
+    }
+
+    private func regenerate() {
+        let prompt = supervisor.configuration.minutesPrompt
+        let baseURL = supervisor.configuration.baseURL(for: .llm)
+        let transcript = self.transcript
+        Task {
+            isRegenerating = true
+            defer { isRegenerating = false }
+            guard let document = await MinutesComposer.generate(
+                transcript: transcript, prompt: prompt, baseURL: baseURL,
+                onProgress: { self.progressText = $0 }
+            ) else { return }
+            var updated = meeting
+            updated.minutes = document
+            store.save(updated)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(meeting.title)
+                .font(.title).bold()
+            Text("\(dateText) · 时长 \(Formatters.clock(meeting.duration)) · \(meeting.segments.count) 条转写")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 缓存的格式化器：DateFormatter 每次创建要几毫秒，不用反复建。
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy年M月d日 HH:mm"
+        return formatter
+    }()
+
+    private var dateText: String {
+        Self.dateFormatter.string(from: meeting.createdAt)
+    }
+
+    @ViewBuilder
+    private func structuredSections(_ minutes: MinutesDocument) -> some View {
+        if !minutes.summary.isEmpty {
+            section(title: "摘要", systemImage: "doc.text") {
+                Text(minutes.summary)
+            }
+        }
+        if !minutes.decisions.isEmpty {
+            section(title: "决议", systemImage: "checkmark.circle") {
+                bulletList(minutes.decisions)
+            }
+        }
+        if !minutes.actionItems.isEmpty {
+            section(title: "行动项", systemImage: "flag") {
+                bulletList(minutes.actionItems)
+            }
+        }
+        if !minutes.keywords.isEmpty {
+            section(title: "关键词", systemImage: "tag") {
+                FlowLayout(spacing: 8) {
+                    ForEach(minutes.keywords, id: \.self) { keyword in
+                        Text(keyword)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(.quaternary, in: Capsule())
+                    }
+                }
+            }
+        }
+    }
+
+    private var transcriptSection: some View {
+        section(title: "转写原文", systemImage: "waveform") {
+            Text(meeting.transcriptText.isEmpty
+                 ? meeting.segments.map(\.text).joined(separator: "\n")
+                 : meeting.transcriptText)
+                .font(.body)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func section<Content: View>(title: String, systemImage: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.title3).bold()
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func bulletList(_ items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 5))
+                        .foregroundStyle(.secondary)
+                    Text(item)
+                }
+            }
+        }
+    }
+}
+
+/// 简单流式布局，用于关键词标签。
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (index, position) in layout(proposal: proposal, subviews: subviews).positions.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
+        }
+    }
+
+    private func layout(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+        return (CGSize(width: min(x, maxWidth), height: y + rowHeight), positions)
+    }
+}
