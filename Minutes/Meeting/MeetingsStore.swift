@@ -12,6 +12,13 @@ final class MeetingsStore {
     let directory: URL
 
     convenience init() {
+        #if DEBUG
+        // 仅供本机 Debug 界面验证使用隔离数据，Release 始终使用 Application Support。
+        if let override = ProcessInfo.processInfo.environment["MINUTES_MEETINGS_ROOT"], !override.isEmpty {
+            self.init(directory: URL(fileURLWithPath: override, isDirectory: true))
+            return
+        }
+        #endif
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = appSupport.appendingPathComponent("Minutes/Meetings", isDirectory: true)
         self.init(directory: directory)
@@ -54,6 +61,10 @@ final class MeetingsStore {
             throw error
         }
         errorMessage = nil
+    }
+
+    func rejectBatchDeletion() {
+        errorMessage = "请一次只删除一场会议。"
     }
 
     func delete(_ meeting: Meeting) throws {
