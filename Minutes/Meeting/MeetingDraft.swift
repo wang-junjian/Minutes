@@ -41,7 +41,13 @@ final class MeetingDraftStore {
     }
 
     func delete(id: UUID) {
-        try? FileManager.default.removeItem(at: url(for: id))
+        do {
+            try FileManager.default.removeItem(at: url(for: id))
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+        } catch {
+            // 残留草稿会被启动扫描的自愈逻辑（已完成会议同名草稿）兜底清理。
+            Log.error("删除草稿失败：\(error.localizedDescription)")
+        }
     }
 
     /// 中断扫描：全部草稿快照（损坏文件跳过），按开始时间升序。

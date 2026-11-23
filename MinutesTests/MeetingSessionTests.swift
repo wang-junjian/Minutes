@@ -717,9 +717,14 @@ final class MeetingSessionTests: XCTestCase {
         await waitUntil { capture.isRunning }
         capture.yield(samples: Array(repeating: Float(0.1), count: 8_000), rms: 0.5)
         await waitUntil { session.energyRing.last == 1 }
+        clock.advance(by: 7)
 
         // 持续讲话无落定：兜底快照也要持久化会议与已落定位置。
         await waitUntil { MeetingDraftStore(directory: directory).load(id: session.meeting.id) != nil }
+        // live 期间的草稿必须携带当前已录时长，而非上次暂停固化的值。
+        await waitUntil {
+            (MeetingDraftStore(directory: directory).load(id: session.meeting.id)?.meeting.duration ?? 0) >= 6.9
+        }
         let draft = try XCTUnwrap(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
         XCTAssertEqual(draft.bufferStartSample, 0)
         XCTAssertTrue(draft.meeting.segments.isEmpty)
@@ -869,6 +874,26 @@ final class MeetingSessionTests: XCTestCase {
         // 续录追加同一 WAV：7 秒旧音频 + 1 秒新音频。
         let audioURL = directory.appendingPathComponent("\(session.meeting.id.uuidString).wav")
         XCTAssertEqual(try Data(contentsOf: audioURL).count, 44 + (112_000 + 16_000) * 2)
+    }
+
+    func testDraftExistsImmediatelyAfterStart() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingSessionTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let capture = ScriptedCapture()
+        let session = MeetingSession(
+            store: MeetingsStore(directory: directory), capture: capture,
+            transcriber: TranscriberStub(), readiness: { _ in true }, now: { clock.now }
+        )
+
+        session.start()
+
+        // 首个兜底间隔之前的早期崩溃也必须有草稿可恢复。
+        let draft = try XCTUnwrap(MeetingDraftStore(directory: directory).load(id: session.meeting.id))
+        XCTAssertEqual(draft.bufferStartSample, 0)
+        XCTAssertTrue(draft.meeting.segments.isEmpty)
+        await session.pause()
     }
 
     private func makeFailingStore() -> (MeetingsStore, URL) {

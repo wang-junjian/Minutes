@@ -16,24 +16,16 @@ final class MeetingAudioFile {
         }
         handle = try FileHandle(forUpdating: url)
         if try handle.seekToEnd() == 0 {
-            try handle.write(contentsOf: Self.header(dataSize: 0))
+            try handle.write(contentsOf: WAVEncoder.header(dataSize: 0))
         }
     }
 
-    /// 追加一段 16 kHz 单声道浮点采样，编码与 WAVEncoder 一致。
+    /// 追加一段 16 kHz 单声道浮点采样，编码与 WAVEncoder 共享同一实现。
     func append(_ samples: [Float]) throws {
         guard samples.allSatisfy(\.isFinite) else {
             throw MinutesError.audio("PCM 包含非有限采样值")
         }
-        var data = Data()
-        data.reserveCapacity(samples.count * 2)
-        for sample in samples {
-            let clipped = max(-1, min(1, sample))
-            let value = UInt16(bitPattern: Int16((clipped * 32_767).rounded()))
-            data.append(UInt8(truncatingIfNeeded: value))
-            data.append(UInt8(truncatingIfNeeded: value >> 8))
-        }
-        try handle.write(contentsOf: data)
+        try handle.write(contentsOf: WAVEncoder.pcm16Data(samples))
     }
 
     /// 回填头部长度；文件可继续追加（恢复续录）。
@@ -65,37 +57,8 @@ final class MeetingAudioFile {
         let dataSize = size >= 44 ? ((size - 44) / 2) * 2 : 0
         try handle.truncate(atOffset: 44 + dataSize)
         try handle.seek(toOffset: 0)
-        try handle.write(contentsOf: header(dataSize: UInt32(dataSize)))
+        try handle.write(contentsOf: WAVEncoder.header(dataSize: UInt32(dataSize)))
         try handle.seekToEnd()
-    }
-
-    /// 与 WAVEncoder 相同的 44 字节 PCM16 WAV 头。
-    private static func header(dataSize: UInt32) -> Data {
-        func u16(_ value: UInt16, into data: inout Data) {
-            data.append(UInt8(truncatingIfNeeded: value))
-            data.append(UInt8(truncatingIfNeeded: value >> 8))
-        }
-        func u32(_ value: UInt32, into data: inout Data) {
-            data.append(UInt8(truncatingIfNeeded: value))
-            data.append(UInt8(truncatingIfNeeded: value >> 8))
-            data.append(UInt8(truncatingIfNeeded: value >> 16))
-            data.append(UInt8(truncatingIfNeeded: value >> 24))
-        }
-        var data = Data()
-        data.reserveCapacity(44)
-        data.append(contentsOf: Array("RIFF".utf8))
-        u32(36 + dataSize, into: &data)
-        data.append(contentsOf: Array("WAVEfmt ".utf8))
-        u32(16, into: &data)
-        u16(1, into: &data)                    // PCM
-        u16(1, into: &data)                    // mono
-        u32(UInt32(WAVEncoder.sampleRate), into: &data)
-        u32(UInt32(WAVEncoder.sampleRate * 2), into: &data)
-        u16(2, into: &data)                    // block align
-        u16(16, into: &data)                   // bits per sample
-        data.append(contentsOf: Array("data".utf8))
-        u32(dataSize, into: &data)
-        return data
     }
 
     deinit {

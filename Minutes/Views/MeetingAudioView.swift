@@ -72,6 +72,7 @@ struct MeetingAudioView: View {
     @Environment(MeetingsStore.self) private var store
     @State private var player: MeetingAudioPlayer?
     @State private var hasAudio = false
+    @State private var audioDeleted = false
     @State private var confirmsDeletion = false
     @State private var rate: Float = 1
 
@@ -113,11 +114,16 @@ struct MeetingAudioView: View {
                     }
                     .font(.caption)
                 }
+            } else if audioDeleted {
+                Label("音频已删除，仅保留转写与纪要。", systemImage: "speaker.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .task(id: meeting.id) {
             let url = store.audioURL(for: meeting)
             hasAudio = FileManager.default.fileExists(atPath: url.path)
+            audioDeleted = false
             player = hasAudio ? MeetingAudioPlayer(url: url) : nil
         }
         .onDisappear { player?.stop() }
@@ -126,6 +132,7 @@ struct MeetingAudioView: View {
                 player?.stop()
                 try? store.deleteAudio(for: meeting)
                 hasAudio = false
+                audioDeleted = true
                 player = nil
             }
             Button("取消", role: .cancel) {}

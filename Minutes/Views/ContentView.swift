@@ -41,6 +41,8 @@ struct ContentView: View {
             if newPhase == .completed, let session {
                 selection = session.meeting.id
                 self.session = nil
+                // 多场中断逐个处理：一场完成后，其余中断会议再次提示。
+                if !interrupted.isEmpty { recoveryDismissed = false }
             }
         }
         .toolbar {
@@ -69,7 +71,18 @@ struct ContentView: View {
         .onAppear {
             appDelegate.session = session
             // 草稿快照存在即中断信号（ADR-0002）；历史列表只含已完成会议。
-            interrupted = MeetingDraftStore(directory: store.directory).loadAll()
+            let drafts = MeetingDraftStore(directory: store.directory)
+            let all = drafts.loadAll()
+            // 自愈：已完成会议的同名残留草稿（完成清理曾失败）不提示中断，直接清理。
+            interrupted = all.filter { draft in
+                let completed = store.meetings.contains { $0.id == draft.meeting.id }
+                if completed { drafts.delete(id: draft.meeting.id) }
+                return !completed
+            }
+            // 启动即确定性修复 WAV 头部，稍后处理或恢复时音频均已可读。
+            for draft in interrupted {
+                try? MeetingAudioFile.repair(at: store.audioURL(for: draft.meeting))
+            }
         }
         .sheet(isPresented: Binding(
             get: { !interrupted.isEmpty && !recoveryDismissed && session == nil },
@@ -152,6 +165,7 @@ struct ContentView: View {
         do {
             let restored = try MeetingSession(restoring: draft, store: store)
             session = restored
+            interrupted.removeAll { $0.meeting.id == draft.meeting.id }
             recoveryDismissed = true
             recoveryError = nil
             if finish {
@@ -162,11 +176,17 @@ struct ContentView: View {
         }
     }
 
-    /// 放弃中断会议：级联删除草稿与音频，其余中断会议可继续处理。
+    /// 放弃中断会议：级联删除草稿与音频，清理失败明确提示。
     private func discardInterrupted(_ draft: MeetingDraft) {
         MeetingDraftStore(directory: store.directory).delete(id: draft.meeting.id)
-        let audioURL = store.directory.appendingPathComponent("\(draft.meeting.id.uuidString).wav")
-        try? FileManager.default.removeItem(at: audioURL)
+        let audioURL = store.audioURL(for: draft.meeting)
+        if FileManager.default.fileExists(atPath: audioURL.path) {
+            do {
+                try FileManager.default.removeItem(at: audioURL)
+            } catch {
+                recoveryError = "音频清理失败：\(error.localizedDescription)"
+            }
+        }
         interrupted.removeAll { $0.meeting.id == draft.meeting.id }
     }
 }

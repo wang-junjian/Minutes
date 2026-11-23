@@ -120,7 +120,11 @@ final class MeetingSession {
     }
 
     private func closeAudioFile() {
-        try? audioFile?.finalize()
+        do {
+            try audioFile?.finalize()
+        } catch {
+            Log.error("音频头部回填失败：\(error.localizedDescription)")
+        }
         audioFile = nil
     }
 
@@ -132,8 +136,14 @@ final class MeetingSession {
 
     /// 自动保存失败只呈现警告，不阻断录制。
     private func saveDraft() {
+        // live 期间 duration 尚未固化进 meeting，快照写盘时实时刷新时长
+        // （不依赖时钟任务的更新节奏），否则恢复显示与续录时长会和音频
+        // 偏移分叉（ADR-0001）。
+        updateElapsed()
+        var snapshotMeeting = meeting
+        snapshotMeeting.duration = max(meeting.duration, elapsed)
         let draft = MeetingDraft(
-            meeting: meeting,
+            meeting: snapshotMeeting,
             bufferStartSample: Int((bufferStart * 16_000).rounded())
         )
         do {
@@ -437,6 +447,8 @@ final class MeetingSession {
         errorMessage = nil
         phase = .live
         openAudioFileIfNeeded()
+        // 有音频即有草稿：首个兜底间隔内的早期崩溃同样可恢复。
+        saveDraft()
         startDraftTask()
         if !hasStarted {
             meeting.createdAt = now()
@@ -545,7 +557,13 @@ final class MeetingSession {
         closeAudioFile()
         draftTask?.cancel(); draftTask = nil
         drafts.delete(id: meeting.id)
-        try? FileManager.default.removeItem(at: audioURL)
+        if FileManager.default.fileExists(atPath: audioURL.path) {
+            do {
+                try FileManager.default.removeItem(at: audioURL)
+            } catch {
+                Log.error("放弃会议清理音频失败：\(error.localizedDescription)")
+            }
+        }
         buffer = []
         unresolvedSnapshot = nil
         failedSnapshots = [:]

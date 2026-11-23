@@ -66,10 +66,21 @@ final class MeetingsStore {
             throw error
         }
         // 级联清理附属文件，避免留下无人管理的残留（ADR-0002）。
-        try? FileManager.default.removeItem(at: audioURL(for: meeting))
-        try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(meeting.id.uuidString).draft"))
+        // 主 JSON 已删除，清理失败必须可观察而不是静默吞掉。
+        var cleanupFailed = false
+        for url in [audioURL(for: meeting), directory.appendingPathComponent("\(meeting.id.uuidString).draft")] {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            } catch {
+                cleanupFailed = true
+                Log.error("级联清理失败 \(url.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
         meetings.removeAll { $0.id == meeting.id }
-        errorMessage = nil
+        errorMessage = cleanupFailed
+            ? "会议已删除，但部分音频或草稿文件清理失败，可在 Finder 中手动清理。"
+            : nil
     }
 
     // MARK: - 私有
