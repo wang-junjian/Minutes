@@ -59,13 +59,15 @@ struct NativeWorkerSmoke {
                 if environment["MINUTES_SMOKE_MAP_REDUCE"] == "1" {
                     let line = "园区确认虚拟电厂一期下周三上线，张三负责数据接入，李四负责告警规则，王五记录压力测试问题。\n"
                     let transcript = String(repeating: line, count: 700)
-                    let document = await MinutesComposer.generate(
-                        transcript: transcript,
+                    let document = try await MinutesComposer.generate(
+                        segments: [TranscriptSegment(
+                            start: 0, end: 0, text: transcript, language: "zh", sequence: 0
+                        )],
                         prompt: MinutesComposer.defaultPrompt,
                         baseURL: URL(string: "http://127.0.0.1:8788")!,
                         onProgress: { print("Map-reduce: \($0)") }
                     )
-                    guard let document, !document.summary.isEmpty else {
+                    guard !document.summary.isEmpty else {
                         throw MinutesError.decoding("长文本 map-reduce 未生成有效纪要")
                     }
                     print("Map-reduce summary=\(document.summary)")

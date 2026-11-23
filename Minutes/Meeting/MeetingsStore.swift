@@ -40,9 +40,17 @@ final class MeetingsStore {
         }
     }
 
-    func delete(_ meeting: Meeting) {
+    func delete(_ meeting: Meeting) throws {
+        do {
+            try FileManager.default.removeItem(at: fileURL(for: meeting))
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            // 目标文件已经不存在时，磁盘已达到删除后的目标状态。
+        } catch {
+            errorMessage = "删除会议失败：\(error.localizedDescription)"
+            throw error
+        }
         meetings.removeAll { $0.id == meeting.id }
-        try? FileManager.default.removeItem(at: fileURL(for: meeting))
+        errorMessage = nil
     }
 
     // MARK: - 私有

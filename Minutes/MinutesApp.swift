@@ -61,20 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 单元测试只加载目标组件，避免测试宿主启动真实模型进程。
         guard NSClassFromString("XCTestCase") == nil else { return }
-        EngineSupervisor.shared.startAll()
-
-        // 重启应用时，上一实例的模型进程可能仍在退出。短暂等待后只重试
-        // 启动失败的 worker；持续被外部服务占用时仍会明确显示失败。
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            let supervisor = EngineSupervisor.shared
-            for kind in EngineWorkerKind.allCases {
-                if case .failed = supervisor.states[kind] {
-                    supervisor.start(kind)
-                }
-            }
-        }
+        EngineSupervisor.shared.startAllForApplicationLaunch()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -17,11 +17,6 @@ struct MinutesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                if let errorMessage = store.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
                 if let regenerationError {
                     Text(regenerationError)
                         .font(.caption)
